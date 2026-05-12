@@ -1,0 +1,85 @@
+% !TEX encoding = UTF-8 Unicode
+% !TEX TS-program = pdflatex
+
+\documentclass[11pt]{report}
+
+\setcounter{secnumdepth}{4}
+\setcounter{tocdepth}{4}
+
+\input{common/packages}
+
+\input{common/package_config}
+
+\input{common/new_commands}
+
+\input{common/thesis_info.tex}
+
+\input{common/font_config.tex}
+
+% If using biblatex, this is correct. If using bibtex, place inside packages or main.
+\addbibresource{bibliography.bib}
+
+% to load the glossaries, not needed if using bib2gls
+\input{glossaries.tex}
+\makeglossaries
+
+\pagestyle{fancy}
+\fancyhf{}  % Svuota le intestazioni esistenti
+\fancyhead[C]{\itshape \leftmark}  % Titolo del capitolo in corsivo
+\fancyfoot[C]{\thepage}  % Numero di pagina centrato in basso
+% Personalizza \chaptermark per mostrare solo il titolo, senza "Chapter X"
+\renewcommand{\chaptermark}[1]{\markboth{#1}{}}
+
+\renewcommand{\thepage}{\Roman{page}}
+
+\begin{document}
+
+\input{common/config}
+
+%\input{common/toptesi_config}
+
+% front page
+\input{common/frontpage.tex} % custom frontpage
+
+\paginavuota % clears a page
+
+\paginavuota % to manually create a blank page
+
+\pagenumbering{Roman}
+%\sommario
+\input{content/abstract}
+
+\phantom{0}
+\cleardoublepage
+\thispagestyle{empty}
+
+%\ringraziamenti
+\input{content/acknowledgements}
+
+\tableofcontents
+
+\listoffigures
+
+\listoftables
+
+\paginavuota
+\printunsrtglossary[style=long,title=Acronyms,type=\acronymtype]
+
+\input{common/post_summary_config.tex}
+
+\paginavuota
+\pagenumbering{arabic}
+
+\input{content/chapters}
+
+\appendix
+\input{content/appendixA}
+\input{content/appendixB}
+
+\phantom{0}
+\cleardoublepage
+\printbibliography[heading=bibintoc] % heading required to show it in ToC
+
+\input{dedications}
+
+\end{document}
