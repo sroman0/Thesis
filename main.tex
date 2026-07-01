@@ -41,10 +41,6 @@
 % front page
 \input{common/frontpage.tex} % custom frontpage
 
-\paginavuota % clears a page
-
-\paginavuota % to manually create a blank page
-
 \pagenumbering{Roman}
 %\sommario
 \input{content/abstract}
@@ -62,12 +58,10 @@
 
 \listoftables
 
-\paginavuota
 \printunsrtglossary[style=long,title=Acronyms,type=\acronymtype]
 
 \input{common/post_summary_config.tex}
 
-\paginavuota
 \pagenumbering{arabic}
 
 \input{content/chapters}
