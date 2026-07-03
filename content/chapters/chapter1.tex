@@ -5,74 +5,75 @@
 \label{sec:introduction-context-motivation}
 
 % Introduce eBPF in generale: origine, evoluzione, ruolo nel kernel Linux.
-% [PLACEHOLDER: apertura generale su eBPF]
 The extended Berkeley Packet Filter (eBPF) is a new programmability mechanism that changes the way we can observe and interact with the Linux kernel. Originally it was designed as a packet filtering mechanism, but now the paradigm has evolved to a more general purpose, addressing the need for observability and security in the Linux kernel.
 
 % Spiega il trade-off: estendere il kernel senza modificarlo, ma con rischi.
-% [PLACEHOLDER: trade-off tra potenza e sicurezza]
-eBPF introduces a tradeoff in kernel development: on one hand, it allows developers to extend the kernel with new features without the need to modify the kernel source code; but on the other hand, this new technology presents a new challenge for security, because it allows to run custom code in kernel space, which is a privileged environment.
+eBPF introduces a tradeoff in kernel development: on one hand, it allows developers to extend the kernel with new features without the need to modify the kernel source code; but on the other hand, this widely adopted Linux kernel technology presents a new challenge for security, because it allows developers to run custom code in kernel space, which is a privileged environment.
 
 % Introduci verifier e sicurezza senza entrare troppo nei dettagli.
-% [PLACEHOLDER: ruolo del verifier]
-So, when we use this technology to load custom programs in the kernel, we need to be sure that the code is safe and does not compromise the security of the system. 
+When we use this mechanism to load custom programs in the kernel, we need to be sure that the code is safe and does not compromise the security of the system. 
 eBPF addresses this problem by introducing a sophisticated verifier framework. This framework is able to analyze the code before it is loaded in the kernel, and to reject any code that does not respect the security and performance constraints.
 It permits programs running in the user space to submit eBPF bytecode to the kernel, which is then verified. 
 
 % Spiega perche' eBPF e' adatto a monitoraggio runtime.
-% [PLACEHOLDER: prestazioni, JIT, esecuzione kernel-side]
 Once the programs are verified, they are executed in the kernel space, achieving high performance and low overhead through Just-in-Time (JIT) compilation, while maintaining or even enhancing integrity and security of the kernel.
 
 % Collega eBPF agli hook kernel.
-% [PLACEHOLDER: hook come punti di osservazione]
 eBPF allows attaching eBPF programs to specific kernel hooks, enabling the observation and collection of events in the kernel space, without the need to modify the kernel source code.
 
 % Introduci la pipeline della tesi.
-% [PLACEHOLDER: kernel hooks -> userspace -> decoding -> output]
 This capability enables a new approach to security monitoring, allowing us to observe security-relevant events in a reliable and structured way, collecting them from different kernel hooks, transporting them to the user space, decoding them and making them usable for further analysis.
 As a result, the impact of this new technology is significant, because it allows us to build a complete pipeline from the kernel space to the user space.
 
 % Chiudi con impatto e motivazione generale.
-% [PLACEHOLDER: adozione in strumenti moderni di observability/security]
 Organizations leverage this new technology, because it permits to leverage the combination of safety, performance and observability, to build next-generation security tools that run in a privileged environment.
 
 \section{Thesis Objectives}
 \label{sec:introduction-thesis-objectives}
 
 % Presenta l'obiettivo principale della tesi.
-% [PLACEHOLDER: obiettivo generale]
-This thesis aims to explore the potential of eBPF technology for security monitoring, by designing and implementing a prototype that demonstrates the capabilities of this new paradigm. 
+This thesis aims to explore the potential of eBPF for security monitoring, by designing and implementing a system that leverages eBPF to collect relevant events from the kernel space, transport them to the user space, and finally make them usable for further security analysis.
 % Metti una bullet list con gli obiettivi specifici.
-% [PLACEHOLDER: lista obiettivi]
+
+In order to achieve this goal, the thesis will focus on the following specific objectives: \begin{itemize}
+    % [TODO: aggiungi obiettivi specifici]
+    \item Implement a kernel-side component that uses eBPF to attach to specific kernel hooks and collect raw events from the kernel space.
+    \item Implement a user-space component that receives the raw events from the kernel space, decodes and enriches them, and finally outputs them in a structured format that can be used for further analysis.
+\end{itemize}
 
 % Chiarisci cosa e' implementato e cosa resta futuro.
-% [PLACEHOLDER: scope attuale vs future work]
+% [TODO: scope attuale vs future work]
 
 \section{Proposed Approach}
 \label{sec:introduction-proposed-approach}
 
 % Descrivi l'approccio ad alto livello.
-% [PLACEHOLDER: overview della pipeline]
+% [TODO: overview della pipeline]
 
 % Cita Tracee come riferimento, senza fare confronto dettagliato.
-% [PLACEHOLDER: riferimento a Tracee]
+% [TODO: riferimento a Tracee]
 
 % Spiega perche' il progetto e' volutamente piu' piccolo.
-% [PLACEHOLDER: MVP controllabile e spiegabile]
+% [TODO: MVP controllabile e spiegabile]
 
 \section{Contributions}
 \label{sec:introduction-contributions}
 
 % Metti una bullet list dei contributi verificabili.
-% [PLACEHOLDER: lista contributi]
+% [TODO: lista contributi]
 
 % Distingui contributi implementati da basi per sviluppi futuri.
-% [PLACEHOLDER: contributi attuali e futuri]
+% [TODO: contributi attuali e futuri]
 
 \section{Thesis Structure}
 \label{sec:introduction-thesis-structure}
 
 % Scrivi questa sezione alla fine.
-% [PLACEHOLDER: panoramica capitoli]
+The thesis is structured as follows: \begin{itemize}
+    \item \textbf{Introduction} introduces the context and motivation of the thesis, presents the objectives, the proposed approach, and the contributions of this work.
+    \item \textbf{Background} provides a background on eBPF, its architecture, and its security implications.
+    \item \textbf{System Design} describes the design and implementation of the proposed system for security monitoring using eBPF.
+    \item \textbf{Evaluation} presents the evaluation of the implemented system, including performance measurements and security analysis.
+    \item \textbf{Conclusion} concludes the thesis with a summary of the findings, limitations, and future work.
+\end{itemize}
 
-% Una frase per ogni capitolo.
-% [PLACEHOLDER: Chapter 2, Chapter 3, ...]
