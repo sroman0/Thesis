@@ -16,7 +16,7 @@ eBPF addresses this problem by introducing a sophisticated verifier framework. T
 It permits programs running in the user space to submit eBPF bytecode to the kernel, which is then verified. 
 
 % Spiega perche' eBPF e' adatto a monitoraggio runtime.
-Once the programs are verified, they are executed in the kernel space, achieving high performance and low overhead through Just-in-Time (JIT) compilation, while maintaining or even enhancing integrity and security of the kernel.
+Once the programs are verified, they are executed in the kernel space, achieving high performance and low overhead through Just-in-Time (JIT) compilation, while maintaining or even enhancing the security of the kernel.
 
 % Collega eBPF agli hook kernel.
 eBPF allows attaching eBPF programs to specific kernel hooks, enabling the observation and collection of events in the kernel space, without the need to modify the kernel source code.
@@ -32,48 +32,43 @@ Organizations leverage this new technology, because it permits to leverage the c
 \label{sec:introduction-thesis-objectives}
 
 % Presenta l'obiettivo principale della tesi.
-This thesis aims to explore the potential of eBPF for security monitoring, by designing and implementing a system that leverages eBPF to collect relevant events from the kernel space, transport them to the user space, and finally make them usable for further security analysis.
-% Metti una bullet list con gli obiettivi specifici.
+This thesis investigates the use of eBPF for security monitoring through the design and implementation of a prototype system that leverages eBPF to collect relevant events from the Linux kernel, transports them to user space, and converts them into structured information for further analysis.% Metti una bullet list con gli obiettivi specifici.
 
 In order to achieve this goal, the thesis will focus on the following specific objectives: \begin{itemize}
-    % [TODO: aggiungi obiettivi specifici]
-    \item Implement a kernel-side component that uses eBPF to attach to specific kernel hooks and collect raw events from the kernel space.
-    \item Implement a user-space component that receives the raw events from the kernel space, decodes and enriches them, and finally outputs them in a structured format that can be used for further analysis.
+    % [TODO: aggiungi obiettivi specifici, RICORDATI DI AGGIUNGERE LE POLICIES]
+    \item Design and implement a kernel-side component that uses eBPF to attach to selected kernel hooks and collect raw relevant events from the kernel space.
+    \item Implement a user-space component that receives the raw events from kernel space, decodes their context and arguments, enriches selected fields, and finally outputs them in a structured format that can be used for further analysis.
+    \item Define an event model and decoding pipeline that separates kernel-side data collection from user-space interpretation and presentation.
+    \item Evaluate the prototype in terms of functional correctness, event coverage, and runtime overhead on the target Linux environment.
 \end{itemize}
 
 % Chiarisci cosa e' implementato e cosa resta futuro.
 % [TODO: scope attuale vs future work]
 
-\section{Proposed Approach}
-\label{sec:introduction-proposed-approach}
+\section{Scope of the Work}
+\label{sec:introduction-scope}
 
-% Descrivi l'approccio ad alto livello.
-% [TODO: overview della pipeline]
+% Chiarisci che il lavoro e' un prototipo di tesi, non un prodotto completo.
+The work presented in this thesis is a research prototype that investigates the use of eBPF for runtime security monitoring. Its scope is to demonstrate how kernel-level events can be collected, transported to user space, decoded, and exposed in a structured form.
 
-% Cita Tracee come riferimento, senza fare confronto dettagliato.
-% [TODO: riferimento a Tracee]
+% Spiega il rapporto con Tracee.
+\textit{Tracee} is used as the main architectural reference, since it represents a production-grade example of eBPF-based runtime security monitoring. Unlike production-grade tools that must support a wide range of kernels and deployment scenarios, this prototype is intentionally tailored to a specific target environment, namely \textit{Rocky Linux 8.10}.
 
-% Spiega perche' il progetto e' volutamente piu' piccolo.
-% [TODO: MVP controllabile e spiegabile]
+% Delimita il focus tecnico.
+The focus of this work is the implementation of kernel hooks related to process and security events, in particular a selected set of events relevant to process execution, filesystem activity, credential changes, memory operations, namespaces, and kernel-hardening signals.
 
-\section{Contributions}
-\label{sec:introduction-contributions}
-
-% Metti una bullet list dei contributi verificabili.
-% [TODO: lista contributi]
-
-% Distingui contributi implementati da basi per sviluppi futuri.
-% [TODO: contributi attuali e futuri]
+% Chiarisci cosa resta fuori o in evoluzione.
+The resulting architecture is intended to provide a basis for further extensions, including policy-based filtering, anomaly detection, and event correlation.
 
 \section{Thesis Structure}
 \label{sec:introduction-thesis-structure}
 
 % Scrivi questa sezione alla fine.
-The thesis is structured as follows: \begin{itemize}
-    \item \textbf{Introduction} introduces the context and motivation of the thesis, presents the objectives, the proposed approach, and the contributions of this work.
-    \item \textbf{Background} provides a background on eBPF, its architecture, and its security implications.
-    \item \textbf{System Design} describes the design and implementation of the proposed system for security monitoring using eBPF.
-    \item \textbf{Evaluation} presents the evaluation of the implemented system, including performance measurements and security analysis.
-    \item \textbf{Conclusion} concludes the thesis with a summary of the findings, limitations, and future work.
+The remainder of this thesis is organized as follows: \begin{itemize}
+    \item \textbf{Chapter 2} introduces the technical background required to understand the work and discusses related runtime security tools, with particular attention to eBPF architecture, the Linux kernel, the Verifier, the eBPF hooks, and the Tracee runtime security tool.
+    \item \textbf{Chapter 3} presents the requirements and the design of the proposed system, including the target environment, the main architectural components, and the design choices that shaped the prototype.
+    \item \textbf{Chapter 4} describes the implementation of the system, covering the eBPF kernel-side component, the Go user-space runtime, event transport, decoding, filtering, output generation, and the main implementation challenges.
+    \item \textbf{Chapter 5} evaluates the prototype in terms of functional behavior, event coverage, runtime overhead, and limitations observed on the target environment.
+    \item \textbf{Chapter 6} concludes the thesis by summarizing the achieved results, discussing the current limitations, and outlining future extensions.
 \end{itemize}
 
