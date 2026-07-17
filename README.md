@@ -30,7 +30,7 @@ LaTeX repository for the thesis:
 Compile the report from this directory:
 
 ```bash
-cd report
+cd Thesis
 ./compile.sh
 ```
 
@@ -125,6 +125,7 @@ included in the compiled report.
 ## Notes
 
 - Use `compile.sh` as the canonical build command.
+- The build stops at the first LaTeX, bibliography or glossary error.
 - Keep generated auxiliary files out of version control.
 - Add thesis prose in chapter files under `content/chapters/`.
 - Use `figures/` and `tables/` for report assets and reusable table snippets.

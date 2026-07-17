@@ -1,8 +1,7 @@
 % !TEX encoding = UTF-8 Unicode
 % !TEX root = ../main.tex
+This thesis presents the design and implementation of a security monitoring tool that collects and analyzes process-related information directly from the operating system kernel using eBPF (extended Berkeley Packet Filter). By leveraging kernel-level instrumentation, the system captures detailed process events with high accuracy and minimal overhead, overcoming the limitations of traditional user-space monitoring approaches.
 
-This thesis presents the design and implementation of a security monitoring tool that collects and analyzes network connection data directly from the operating system kernel using \gls{ebpf}. By leveraging kernel-level instrumentation, the system captures detailed information about network activity with high accuracy and minimal overhead, overcoming the limitations of traditional user-space monitoring approaches.
+The proposed tool adopts a modular and efficient architecture to ensure scalability and real-time data collection. The gathered information is structured to support security analysis, enabling the detection of anomalous behaviors such as unauthorized executions and privilege escalations.
 
-The proposed tool adopts a modular and efficient architecture to ensure scalability and real-time data collection. The gathered data is structured to support security analysis, enabling the detection of anomalous behaviors such as suspicious outbound connections, unauthorized communication patterns, and potential data exfiltration attempts.
-
-This work demonstrates how kernel-derived network telemetry, combined with \gls{ebpf} technology, can enhance system visibility and provide a solid foundation for advanced network security monitoring and threat detection.
+This work demonstrates how kernel-derived process data, combined with eBPF technology, can enhance system visibility and provide a solid foundation for advanced security monitoring and threat detection.

@@ -4,71 +4,126 @@
 \section{Context and Motivation}
 \label{sec:introduction-context-motivation}
 
-% Introduce eBPF in generale: origine, evoluzione, ruolo nel kernel Linux.
-The extended Berkeley Packet Filter (eBPF) is a new programmability mechanism that changes the way we can observe and interact with the Linux kernel. Originally it was designed as a packet filtering mechanism, but now the paradigm has evolved to a more general purpose, addressing the need for observability and security in the Linux kernel.
+\subsection{Runtime Security and Kernel-Level Visibility}
+\label{subsec:introduction-runtime-security}
 
-% Spiega il trade-off: estendere il kernel senza modificarlo, ma con rischi.
-eBPF introduces a tradeoff in kernel development: on one hand, it allows developers to extend the kernel with new features without the need to modify the kernel source code; but on the other hand, this widely adopted Linux kernel technology presents a new challenge for security, because it allows developers to run custom code in kernel space, which is a privileged environment.
+Modern Linux systems execute applications, containers, and infrastructure services whose security-relevant behaviour changes continuously at runtime. Static inspection can describe software before execution, while application logs expose only the information that applications choose to report. Neither source alone provides a complete account of operations such as process creation, credential changes, file access, memory protection changes, namespace activity, or interactions with kernel security mechanisms. Runtime security monitoring therefore requires an observation point that is close enough to the operating system to capture these actions as they occur.
 
-% Introduci verifier e sicurezza senza entrare troppo nei dettagli.
-When we use this mechanism to load custom programs in the kernel, we need to be sure that the code is safe and does not compromise the security of the system. 
-eBPF addresses this problem by introducing a sophisticated verifier framework. This framework is able to analyze the code before it is loaded in the kernel, and to reject any code that does not respect the security and performance constraints.
-It permits programs running in the user space to submit eBPF bytecode to the kernel, which is then verified. 
+The Linux kernel is a valuable observation layer because it mediates processes, files, credentials, memory, and other shared resources. Kernel-level telemetry can reveal behaviour that is distributed across several applications or omitted from their logs. This visibility is particularly relevant in containerised environments, where workloads remain isolated at the application level but share the host kernel. At the same time, kernel instrumentation is security-sensitive: excessive privileges or unsafe extensions may increase the attack surface, especially across container boundaries \cite{he2023crosscontainer}. A monitoring design must consequently balance visibility, compatibility, operational cost, and the risks associated with privileged execution.
 
-% Spiega perche' eBPF e' adatto a monitoraggio runtime.
-Once the programs are verified, they are executed in the kernel space, achieving high performance and low overhead through Just-in-Time (JIT) compilation, while maintaining or even enhancing the security of the kernel.
+Runtime security tools increasingly use \gls{ebpf} to obtain this visibility. Existing systems demonstrate that eBPF can support process, file, network, and security telemetry in cloud-native environments, although their architectures and performance characteristics differ \cite{her2025ebpfsecuritytools}. This thesis focuses on the process and host-security side of that design space.
 
-% Collega eBPF agli hook kernel.
-eBPF allows attaching eBPF programs to specific kernel hooks, enabling the observation and collection of events in the kernel space, without the need to modify the kernel source code.
+\subsection{eBPF as an Enabling Technology}
+\label{subsec:introduction-ebpf}
 
-% Introduci la pipeline della tesi.
-This capability enables a new approach to security monitoring, allowing us to observe security-relevant events in a reliable and structured way, collecting them from different kernel hooks, transporting them to the user space, decoding them and making them usable for further analysis.
-As a result, the impact of this new technology is significant, because it allows us to build a complete pipeline from the kernel space to the user space.
+eBPF provides a controlled runtime inside the Linux kernel. User-space software loads constrained programs that can be attached to supported tracing, networking, and security hooks. Before a program is accepted, the kernel verifier analyses its control flow and use of memory, registers, pointers, and helper functions. Accepted programs can then collect or transform data when the corresponding hook is reached \cite{gbadamosi2024ebpf,linux2024ebpfuserspaceapi,linux2026ebpfverifier}.
 
-% Chiudi con impatto e motivazione generale.
-Organizations leverage this new technology, because it permits to leverage the combination of safety, performance and observability, to build next-generation security tools that run in a privileged environment.
+This execution model is well suited to runtime monitoring for three reasons. First, collection occurs at the point where the kernel processes the operation, reducing dependence on application-specific instrumentation. Second, eBPF maps and event buffers provide structured communication between kernel and user space. Third, programs can reject irrelevant activity before transporting it to user space, which creates an opportunity to control processing overhead. These properties do not make an eBPF tool automatically safe, portable, or efficient: verifier behaviour, available program types, helper functions, kernel data structures, and attachment mechanisms vary across kernel versions. They instead provide the foundation on which a target-aware monitoring pipeline can be built.
 
-\section{Thesis Objectives}
-\label{sec:introduction-thesis-objectives}
+\subsection{Industrial and Deployment Context}
+\label{subsec:introduction-industrial-context}
 
-% Presenta l'obiettivo principale della tesi.
-This thesis investigates the use of eBPF for security monitoring through the design and implementation of a prototype system that leverages eBPF to collect relevant events from the Linux kernel, transports them to user space, and converts them into structured information for further analysis.% Metti una bullet list con gli obiettivi specifici.
+The work was developed in an industrial collaboration and targets Rocky Linux 8.10 with the RHEL-compatible kernel \texttt{4.18.0-553.109.1.el8\_10.x86\_64}. This environment is important because it combines a long-lived enterprise kernel line with backported functionality. A feature exposed by a newer upstream kernel cannot be assumed to exist, or to behave identically, on this target. Compatibility is therefore treated as an architectural constraint rather than as a final packaging concern.
 
-In order to achieve this goal, the thesis will focus on the following specific objectives: \begin{itemize}
-    % [TODO: aggiungi obiettivi specifici, RICORDATI DI AGGIUNGERE LE POLICIES]
-    \item Design and implement a kernel-side component that uses eBPF to attach to selected kernel hooks and collect raw relevant events from the kernel space.
-    \item Implement a user-space component that receives the raw events from kernel space, decodes their context and arguments, enriches selected fields, and finally outputs them in a structured format that can be used for further analysis.
-    \item Define an event model and decoding pipeline that separates kernel-side data collection from user-space interpretation and presentation.
-    \item Evaluate the prototype in terms of functional correctness, event coverage, and runtime overhead on the target Linux environment.
+The resulting prototype, named \emph{Vesuvius}, is intended to operate as a node-level monitoring agent. Its container image packages both the compiled executable and the eBPF object, and its intended Kubernetes deployment model places one privileged monitoring instance on each selected node. Kubernetes DaemonSets are designed for this class of node-scoped service and are commonly used for monitoring and logging agents \cite{kubernetes_daemonset}. Cluster-wide ingestion and correlation may be performed by an external platform; Vesuvius itself is deliberately concerned with bounded local collection and detection. The thesis does not claim that a complete Kubernetes deployment has been validated.
+
+\section{Problem Statement}
+\label{sec:introduction-problem-statement}
+
+\subsection{Security-Relevant Process Monitoring}
+\label{subsec:introduction-process-monitoring}
+
+The central problem addressed by this thesis is how to convert heterogeneous kernel observations into useful security information on a constrained enterprise Linux target. Capturing an event is only the first step. A practical pipeline must assign a stable identity to the event, transport it without confusing records produced by different probes, decode typed arguments, apply user-selected scope, and present the result consistently. When these contracts diverge, valid kernel records may be decoded as unknown events, attributed to the wrong event type, or silently discarded.
+
+Individual observations also have different analytical value. Some are relevant in isolation, for example an access to a sensitive file under narrowly defined conditions. Others become relevant only as an ordered group, such as a credential transition followed shortly by process execution or sensitive file access. Following the established anomaly-detection taxonomy, the thesis uses \emph{point event} for a locally significant observation and \emph{short collective event pattern} for a bounded sequence whose combined meaning is more relevant than its elements considered independently \cite{chandola2009anomaly}. These terms describe deterministic, rule-based detection; they do not imply machine learning, statistical baselines, or unsupervised anomaly detection.
+
+Policies and detectors have distinct roles in the proposed system. Policies select the event domain that should be collected and evaluated. Detectors express conditions over those normalised events and may produce an alert from one event or from a short process-aware sequence. Alerts carry MITRE ATT\&CK metadata to classify and communicate the observed behaviour. ATT\&CK organises adversary behaviour through tactics and techniques \cite{strom2020attack}; the mapping used by Vesuvius provides traceability, but does not by itself prove detector correctness, coverage, or novelty.
+
+\subsection{Technical Constraints}
+\label{subsec:introduction-technical-constraints}
+
+Four constraints shape the problem. First, the target kernel limits which attachment mechanisms, helpers, maps, and portability techniques can be used reliably. Second, the kernel verifier constrains program complexity and memory access, so event enrichment must be divided carefully between kernel and user space. Third, high-frequency hooks can generate enough data to make transport, decoding, rule evaluation, and output formatting more expensive than the probe itself. Fourth, the agent is expected to run beside production workloads; CPU and memory use are therefore evaluation criteria rather than secondary implementation details.
+
+These constraints motivate a selective architecture. Vesuvius uses eBPF for collection and optional early filtering, while user space owns event normalisation, policy management, detector evaluation, alert generation, and presentation. The design preserves a stable kernel-to-user-space contract while allowing detection logic to evolve without recompiling every eBPF program.
+
+\section{Objectives and Research Questions}
+\label{sec:introduction-objectives}
+
+\subsection{Main Objective}
+\label{subsec:introduction-main-objective}
+
+The main objective of this thesis is to design, implement, and evaluate an eBPF-based runtime security monitoring prototype that collects process and security-relevant kernel events on the target Rocky Linux environment, normalises them in user space, and evaluates them through configurable policies and local detectors.
+
+\subsection{Specific Objectives}
+\label{subsec:introduction-specific-objectives}
+
+The work pursues the following specific objectives:
+
+\begin{itemize}
+    \item collect selected process and security events through eBPF programs compatible with the target kernel;
+    \item define a coherent contract across eBPF event identifiers, transport buffers, the Go decoder, the event registry, and output components;
+    \item support declarative event selection through policies and local rule-based detection through YAML detector definitions;
+    \item detect both security-relevant point events and bounded collective patterns using limited process-aware correlation;
+    \item associate detector output with MITRE ATT\&CK metadata for classification and downstream traceability;
+    \item evaluate functional behaviour, CPU consumption, memory use, and the effect of an experimental early kernel-side user-identifier filter.
 \end{itemize}
 
-% Chiarisci cosa e' implementato e cosa resta futuro.
-% [TODO: scope attuale vs future work]
+\subsection{Research Questions}
+\label{subsec:introduction-research-questions}
 
-\section{Scope of the Work}
-\label{sec:introduction-scope}
+The thesis is guided by three research questions:
 
-% Chiarisci che il lavoro e' un prototipo di tesi, non un prodotto completo.
-The work presented in this thesis is a research prototype that investigates the use of eBPF for runtime security monitoring. Its scope is to demonstrate how kernel-level events can be collected, transported to user space, decoded, and exposed in a structured form.
+\begin{description}
+    \item[\textbf{RQ1}] Which architectural and implementation adaptations are required to build an eBPF-based process and security monitoring pipeline on the target Rocky Linux 8.10 kernel?
+    \item[\textbf{RQ2}] How can heterogeneous kernel events be normalised and evaluated through declarative policies and detectors to identify security-relevant point events and short collective event patterns?
+    \item[\textbf{RQ3}] What CPU and memory overhead does the proposed pipeline introduce under the selected benchmark profiles, and how does early kernel-side user-identifier filtering affect that overhead?
+\end{description}
 
-% Spiega il rapporto con Tracee.
-\textit{Tracee} is used as the main architectural reference, since it represents a production-grade example of eBPF-based runtime security monitoring. Unlike production-grade tools that must support a wide range of kernels and deployment scenarios, this prototype is intentionally tailored to a specific target environment, namely \textit{Rocky Linux 8.10}.
+\section{Contributions of the Work}
+\label{sec:introduction-contributions}
 
-% Delimita il focus tecnico.
-The focus of this work is the implementation of kernel hooks related to process and security events, in particular a selected set of events relevant to process execution, filesystem activity, credential changes, memory operations, namespaces, and kernel-hardening signals.
+\subsection{System and Implementation Contributions}
+\label{subsec:introduction-system-contributions}
 
-% Chiarisci cosa resta fuori o in evoluzione.
-The resulting architecture is intended to provide a basis for further extensions, including policy-based filtering, anomaly detection, and event correlation.
+The first contribution is a target-aware monitoring architecture adapted to Rocky Linux 8.10. It combines selected process and security probes with a Go runtime responsible for probe attachment, event transport, decoding, filtering, and structured output. The implementation covers security-relevant areas including process execution and lifecycle, credential transitions, file operations, memory activity, namespaces, capabilities, signalling, and selected kernel-integrity operations. This is selected coverage, not a claim of complete Linux observability or feature equivalence with broader runtime-security products.
+
+The second contribution is a coherent event contract across kernel and user space. Event identifiers and probe dependencies are represented explicitly so that user-selectable events are distinguished from internal attachment dependencies. This separation addresses a concrete failure mode observed during development: multiple programs may share transport maps, yet only the programs required by the selected events should be attached and only their corresponding records should be exposed as public events. Typed decoding, argument enrichment, and separate outputs for diagnostics, raw events, and alerts complete this processing path.
+
+\subsection{Detection and Security Contributions}
+\label{subsec:introduction-detection-contributions}
+
+The third contribution is a declarative local detection pipeline. Policies select relevant event sets, while YAML detector definitions describe point conditions or ordered steps. The runtime evaluates these definitions, keeps bounded state for short collective patterns, applies limited process-aware grouping, suppresses repeated alerts where configured, and emits structured evidence. Detector definitions also propagate MITRE ATT\&CK tactics and techniques into alert output. Declarative policies and multi-event detection are established ideas in systems such as Tracee \cite{aquasecurity_tracee_policies,aquasecurity_tracee_k8s_api_connection}; the contribution here lies in their integration with the Vesuvius event model and target constraints, not in claiming these ideas in isolation.
+
+The fourth contribution concerns operational and performance controls. Vesuvius provides configurable event and command filters, alert-only output, structured runtime logging, reproducible benchmark profiles, and container packaging for the executable and embedded eBPF object. An experimental kernel-side user-identifier filter can discard events before transport. Its value is assessed empirically in this thesis; the design objective of remaining below five percent of one CPU core is not presented as an achieved result.
+
+\subsection{Distinctive Aspects of the Proposed Approach}
+\label{subsec:introduction-distinctive-aspects}
+
+The distinctive aspect of the work is the design and evaluation of a lightweight, bounded, and process-aware local detection pipeline integrated with an eBPF monitoring agent adapted to the constraints of Rocky Linux 8's 4.18-based enterprise kernel. The approach intentionally limits local state and temporal windows because the agent is expected to run on monitored nodes with a constrained resource budget. It produces point alerts and short collective evidence locally, while leaving cluster-wide or long-lived contextual reasoning to an external system with broader visibility.
+
+This aspect is treated as a candidate contribution whose significance must be supported by comparison and evaluation in later chapters. eBPF monitoring, YAML configuration, MITRE ATT\&CK tagging, kernel filtering, and multi-event detection are not individually claimed as novel. Tracee is used as a principal engineering reference because it documents a mature eBPF event and policy architecture \cite{aquasecurity_tracee}; Vesuvius adopts relevant design patterns selectively and changes them where the target kernel, reduced scope, or bounded local-detection model requires a different trade-off.
+
+\section{Scope and Limitations}
+\label{sec:introduction-scope-limitations}
+
+\subsection{In-Scope Capabilities}
+\label{subsec:introduction-in-scope}
+
+The thesis covers node-level collection of selected Linux process and security events, their transport and normalisation in user space, declarative policy selection, rule-based point detection, and bounded collective detection. It also covers structured event and alert output, MITRE ATT\&CK metadata propagation, container packaging, functional tests, and performance measurements on the specified Rocky Linux environment. Selected networking instrumentation exists as an adjacent, collaboratively developed capability, but it is not the main contribution or evaluation focus of this work.
+
+\subsection{Out-of-Scope Capabilities}
+\label{subsec:introduction-out-of-scope}
+
+Vesuvius is a research prototype rather than a production-ready prevention platform. Active enforcement, automatic response, machine-learning-based anomaly detection, distributed correlation across nodes, and cluster-contextual detection are outside the scope of the implemented local engine. The work does not claim universal kernel portability, exhaustive event coverage, equivalence with Tracee, semantic validation of ATT\&CK mappings, or validated production operation in Kubernetes. Likewise, the performance target is evaluated under defined profiles and is not assumed to hold for every workload, event selection, or output configuration.
+
+\section{Methodology}
+\label{sec:introduction-methodology}
+
+The research follows an iterative design, implementation, and evaluation methodology. The target environment and security-monitoring requirements are first translated into an architecture that separates kernel collection from user-space interpretation. Tracee source code and documentation are examined as an engineering reference, while each adopted pattern is checked against the capabilities of the target kernel. Features are then implemented incrementally across the eBPF programs, probe registry, decoder, policy manager, detector engine, and output layer.
+
+Verification combines automated Go tests, build-time checks for the eBPF object and embedded binary, and targeted runtime tests that trigger individual hooks or detector sequences. Registry and decoding consistency are checked end to end because successful probe attachment alone does not demonstrate correct event interpretation. Performance is evaluated through repeatable profiles that record CPU utilisation, resident memory, and thread count after a warm-up period. Filtered and unfiltered configurations are compared under the same event and detector workload. This methodology supports an evidence-based answer to the research questions while keeping implementation detail in the design, implementation, and evaluation chapters.
 
 \section{Thesis Structure}
 \label{sec:introduction-thesis-structure}
 
-% Scrivi questa sezione alla fine.
-The remainder of this thesis is organized as follows: \begin{itemize}
-    \item \textbf{Chapter 2} introduces the technical background required to understand the work and discusses related runtime security tools, with particular attention to eBPF architecture, the Linux kernel, the Verifier, the eBPF hooks, and the Tracee runtime security tool.
-    \item \textbf{Chapter 3} presents the requirements and the design of the proposed system, including the target environment, the main architectural components, and the design choices that shaped the prototype.
-    \item \textbf{Chapter 4} describes the implementation of the system, covering the eBPF kernel-side component, the Go user-space runtime, event transport, decoding, filtering, output generation, and the main implementation challenges.
-    \item \textbf{Chapter 5} evaluates the prototype in terms of functional behavior, event coverage, runtime overhead, and limitations observed on the target environment.
-    \item \textbf{Chapter 6} concludes the thesis by summarizing the achieved results, discussing the current limitations, and outlining future extensions.
-\end{itemize}
-
+The remainder of this thesis is organised as follows. Chapter~2 presents the technical background and related work, including Linux runtime instrumentation, eBPF, runtime-security tools, anomaly categories, and policy-driven detection. Chapter~3 derives the requirements and describes the architecture of Vesuvius. Chapter~4 explains the implementation of the kernel programs, user-space event pipeline, policy subsystem, detector engine, logging, and packaging. Chapter~5 evaluates functional correctness, event coverage, detector behaviour, and performance on the target environment. Chapter~6 summarises the results, answers the research questions, discusses limitations, and identifies directions for future work.
