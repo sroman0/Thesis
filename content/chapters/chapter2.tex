@@ -1,4 +1,4 @@
-\chapter{Background and Related Work}
+\chapter{Background and eBPF architecture}
 \label{ch:background-related-work}
 
 \section{Linux Kernel Observability}
@@ -105,71 +105,58 @@ still does not necessarily reveal the final outcome; when the result matters,
 it must be obtained from a compatible return-side observation
 \cite{linux_lsm_development,linux_libbpf_program_types,linux_kprobes}.
 
-\begin{table}[htbp]
-      \centering
-      \small
-      \renewcommand{\arraystretch}{1.25}
-      \caption[Comparison of Linux kernel observation mechanisms]
-      {Comparison of the principal Linux kernel observation mechanisms
-      \cite{linux_tracepoints,linux_kprobes,linux_lsm_development,
-      linux_libbpf_program_types}.}
-      \label{tab:kernel-observation-mechanisms}
+\begin{table}[H]
+    \centering
+    \footnotesize
+    \setlength{\tabcolsep}{5pt}
+    \renewcommand{\arraystretch}{1.18}
+    \label{tab:kernel-observation-sources}
 
-      \begin{tabularx}{\textwidth}{
-          @{}
-          >{\raggedright\arraybackslash}p{0.17\textwidth}
-          >{\raggedright\arraybackslash}p{0.22\textwidth}
-          >{\raggedright\arraybackslash}X
-          >{\raggedright\arraybackslash}p{0.25\textwidth}
-          @{}
-      }
-          \toprule
-          \textbf{Mechanism} &
-          \textbf{Observation point} &
-          \textbf{Available information} &
-          \textbf{Main trade-off} \\
-          \midrule
+    \begin{tabularx}{\textwidth}{
+        @{}
+        >{\raggedright\arraybackslash}p{0.18\textwidth}
+        >{\raggedright\arraybackslash}p{0.31\textwidth}
+        >{\raggedright\arraybackslash}X
+        @{}
+    }
+        \toprule
+        \textbf{Observation source} &
+        \textbf{Information exposed} &
+        \textbf{Main trade-off} \\
+        \midrule
 
-          System-call tracepoint &
-          Entry or exit of a system call &
-          Original system-call arguments at entry, or the return value at exit &
-          Provides broad process-level visibility, but limited information about
-          internal kernel processing. \\
+        System-call tracepoint &
+        Arguments at entry or return value at exit. &
+        Broad process visibility, but limited insight into internal kernel
+        processing and resolved objects. \\
 
-          Tracepoint &
-          Static point explicitly defined in the kernel source &
-          Structured, event-specific context declared by the kernel &
-          Offers a comparatively stable interface, but can be used only where
-          the target kernel provides a suitable tracepoint. \\
+        Kernel tracepoint &
+        Structured fields defined for a specific kernel event. &
+        Clear semantics and simple decoding, but only where a suitable
+        tracepoint is available. \\
 
-          Raw tracepoint &
-          Lower-level interface to an existing tracepoint &
-          Original arguments passed to the tracepoint with less preprocessing &
-          Reduces intermediate processing, but requires more manual and
-          kernel-aware argument decoding. \\
+        Raw tracepoint &
+        Original tracepoint arguments with minimal preprocessing. &
+        More direct access, but requires kernel-aware argument decoding. \\
 
-          Kprobe &
-          Dynamically selected kernel instruction, commonly a function entry &
-          Processor-register context from which function arguments can be
-          recovered &
-          Can observe functions without tracepoints, but depends more strongly
-          on kernel symbols, signatures, and calling conventions. \\
+        Kprobe / kretprobe &
+        Register state at function entry or return. &
+        Flexible placement, but stronger dependence on kernel symbols,
+        signatures and calling conventions. \\
 
-          Kretprobe &
-          Return from a dynamically probed kernel function &
-          Function return value and processor-register context &
-          Reveals operation results, but entry arguments and return values must
-          be correlated explicitly when both are required. \\
+        LSM-related hook &
+        Security context, resolved objects and mediation stage. &
+        Rich security semantics, but attachment and result visibility depend
+        on target-kernel support. \\
 
-          LSM hook &
-          Kernel security mediation point &
-          Security-relevant operation context and resolved kernel objects &
-          Provides richer security semantics, but the available attachment
-          mechanisms depend on the capabilities of the target kernel. \\
-
-          \bottomrule
-      \end{tabularx}
-  \end{table}
+        \bottomrule
+    \end{tabularx}
+    \caption[Observation sources for eBPF runtime monitoring]
+    {Comparison of the principal observation sources relevant to
+    eBPF-based runtime monitoring
+    \cite{linux_tracepoints,linux_kprobes,linux_lsm_development,
+    linux_libbpf_program_types}.}
+\end{table}
 
 \medskip
 \noindent\textbf{The role of eBPF.}
@@ -261,12 +248,7 @@ the program is invoked, avoiding the overhead of processing the eBPF
 instructions individually at each execution
 \cite{linux_bpf_execution_modes,linux_bpf_jit_sysctl}.
 
-JIT compilation does not alter the functionality authorised by the verifier.
-The translation is performed only after verification and preserves the
-semantics of the accepted eBPF program. Its availability depends on the host
-architecture, the kernel build configuration, and the runtime JIT settings.
-
-\begin{figure}[htbp]
+\begin{figure}[H]
     \centering
 
     \includegraphics[
@@ -276,11 +258,15 @@ architecture, the kernel build configuration, and the runtime JIT settings.
     ]{figures/chapter2/eBPF-schema.png}
 
     \caption[High-level eBPF execution workflow]
-    {High-level eBPF execution workflow, from user-space compilation and
-    kernel loading to verification, attachment, and event-driven execution.}
+    {High-level eBPF execution workflow.}
 
     \label{fig:ebpf-execution-workflow}
 \end{figure}
+
+JIT compilation does not alter the functionality authorised by the verifier.
+The translation is performed only after verification and preserves the
+semantics of the accepted eBPF program. Its availability depends on the host
+architecture, the kernel build configuration, and the runtime JIT settings.
 
 This completes the basic eBPF execution path considered here. A program is
 compiled into eBPF instructions, submitted to the kernel, analysed by the
@@ -288,34 +274,56 @@ verifier and, if accepted, translated into native machine code and executed
 whenever its associated hook or execution context is invoked
 \cite{gbadamosi2024ebpf}.
 
-\subsection{Program Types, Hooks and Attachment Mechanisms}
-\label{subsec:ebpf-program-types-hooks-attachment}
+\subsection{Hook Selection and Event Semantics}
+\label{subsec:ebpf-hook-selection-event-semantics}
 
-Three related concepts must be distinguished. A \emph{program type} defines the
-kind of eBPF program, the context supplied by the kernel, and the helpers and
-return semantics that are permitted. A \emph{hook} is the event or kernel
-location that triggers execution. An \emph{attachment mechanism} connects the
-loaded program to that hook and manages its lifetime. Build tools often encode
-the expected combination in an Executable and Linkable Format section name,
-but that section name is loader metadata rather than the hook itself
-\cite{linux_libbpf_program_types,linux2024ebpfuserspaceapi}.
+An eBPF program type defines the execution contract enforced by the kernel,
+including the expected context, available helpers, and permitted return
+semantics. The hook instead identifies the event or kernel execution point
+that triggers the program, while the attachment mechanism binds the loaded
+program to a compatible hook. These concepts are related, but they are not
+interchangeable
+\cite{linux_libbpf_program_types,linux_bpf_helpers}.
 
-Tracing programs can be attached to tracepoints, raw tracepoints, kprobes,
-kretprobes, and other supported tracing interfaces. Other program types address
-networking, cgroups, sockets, performance monitoring, or LSM mediation. The
-same security question may be observable through more than one mechanism, but
-the resulting semantics differ. For example, a system-call entry hook can read
-the arguments supplied by a process, while a later kernel hook may expose a
-resolved object or a security decision made during the operation
-\cite{linux_libbpf_program_types,linux_tracepoints,linux_kprobes}.
+The selected observation point determines not only when an eBPF program runs,
+but also the meaning of the resulting event. A system-call entry hook captures
+the operation requested by a process and its original arguments. A later
+tracepoint, dynamic probe, or LSM-related hook may expose kernel-resolved
+objects or the security mediation stage of the operation. An exit or
+return-side observation can instead reveal whether the operation completed
+successfully
+\cite{linux_tracepoints,linux_kprobes,linux_lsm_development}.
 
-Program lifetime is controlled by references held through file descriptors,
-links, or mechanism-specific resources. Modern BPF links provide a uniform way
-to represent some attachments, but link support and individual attachment
-types evolved over time. A loader targeting an enterprise kernel must therefore
-select mechanisms supported by the actual system rather than assume that every
-interface present in current upstream documentation is available
-\cite{linux_libbpf_overview,redhat2025backporting}.
+These observations represent different stages of the same kernel execution
+path and should therefore be considered complementary rather than
+interchangeable. No single hook necessarily exposes the original request,
+the resolved kernel context, and the final result. A runtime monitor may
+consequently combine multiple event sources and correlate their records
+through process identity and temporal proximity.
+
+Hook selection also introduces a compatibility trade-off. Explicit
+tracepoints provide structured interfaces when the target kernel exports a
+suitable event, whereas dynamic probes offer broader placement flexibility
+but depend more strongly on kernel symbols, function signatures, and calling
+conventions. The appropriate observation point must therefore balance the
+required security semantics with the capabilities and stability of the
+deployment kernel
+\cite{linux_tracepoints,linux_kprobes,redhat2025backporting}.
+
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.90\textwidth,
+        height=0.55\textheight,
+        keepaspectratio
+    ]{figures/chapter2/eBPF_observation_progression.png}
+
+    \caption[Complementary evidence exposed by different observation points along a kernel operation.]
+    {Complementary evidence exposed by different observation points along a kernel operation.}
+
+    \label{fig:ebpf-observation-progression}
+\end{figure}
 
 \subsection{Maps, Helpers and Kernel-to-Userspace Transport}
 \label{subsec:ebpf-maps-helpers-transport}

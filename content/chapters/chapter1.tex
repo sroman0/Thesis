@@ -39,7 +39,7 @@ The main objective of this thesis is to design, implement, and evaluate an eBPF-
 The remainder of the thesis develops this objective progressively, moving from the necessary technical foundations to the architecture, implementation, and evaluation of the proposed system:
 
 \begin{itemize}
-    \item \textbf{Chapter~2 - Background and Related Work} introduces Linux runtime instrumentation, the eBPF execution model, and the concepts required to understand process and security monitoring. It also reviews related runtime-security tools and policy-driven detection approaches.
+    \item \textbf{Chapter~2 - Background and eBPF architecture} introduces Linux runtime instrumentation, the eBPF execution model, and the concepts required to understand process and security monitoring. It also reviews related runtime-security tools and policy-driven detection approaches.
     \item \textbf{Chapter~3 - Requirements and System Design} defines the target environment, functional and operational requirements, architectural components, event flow, and the boundaries between kernel-space collection and user-space processing.
     \item \textbf{Chapter~4 - Implementation} describes the eBPF programs, probe management, binary event contract, Go runtime, decoder, policy and detector subsystems, \gls{attack} metadata, output handling, logging, and container packaging.
     \item \textbf{Chapter~5 - Experimental Evaluation} evaluates functional behaviour, event and detector operation, \gls{cpu} and memory consumption, and the effects of the implemented filtering and performance controls on the target Rocky Linux environment.
