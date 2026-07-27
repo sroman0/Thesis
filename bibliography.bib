@@ -10,6 +10,7 @@
 @online{linux2024ebpfuserspaceapi,
   author  = {{Linux Kernel Community}},
   title   = {{eBPF} Userspace {API}},
+  year    = {2024},
   url     = {https://www.kernel.org/doc/html/v6.9/userspace-api/ebpf/index.html},
   urldate = {2026-07-17},
   note    = {Linux kernel 6.9 documentation}
@@ -18,8 +19,28 @@
 @online{linux2026ebpfverifier,
   author  = {{Linux Kernel Community}},
   title   = {{eBPF} Verifier},
+  year    = {2026},
   url     = {https://docs.kernel.org/bpf/verifier.html},
   urldate = {2026-07-17}
+}
+
+@online{redhat2025backporting,
+  author  = {{Red Hat}},
+  title   = {What Is Backporting and How Does It Affect {Red Hat Enterprise Linux}?},
+  year    = {2025},
+  month   = jun,
+  url     = {https://access.redhat.com/solutions/57665},
+  urldate = {2026-07-27},
+  note    = {Red Hat Customer Portal}
+}
+
+@online{aquasecurity_libbpfgo,
+  author  = {{Aqua Security}},
+  title   = {\texttt{libbpfgo}: An {eBPF} Library for {Go} Powered by \texttt{libbpf}},
+  year    = {2026},
+  url     = {https://github.com/aquasecurity/libbpfgo},
+  urldate = {2026-07-27},
+  note    = {Official project repository}
 }
 
 @article{chandola2009anomaly,
@@ -31,8 +52,7 @@
   number    = {3},
   pages     = {15:1--15:58},
   month     = jul,
-  doi       = {10.1145/1541880.1541882},
-  publisher = {Association for Computing Machinery}
+  doi       = {10.1145/1541880.1541882}
 }
 
 @techreport{strom2020attack,
@@ -44,19 +64,13 @@
   url         = {https://www.mitre.org/news-insights/publication/mitre-attck-design-and-philosophy}
 }
 
-@online{kubernetes_daemonset,
-  author  = {{The Kubernetes Authors}},
-  title   = {DaemonSet},
-  url     = {https://kubernetes.io/docs/concepts/workloads/controllers/daemonset/},
-  urldate = {2026-07-17},
-  note    = {Kubernetes Documentation}
-}
-
 @inproceedings{he2023crosscontainer,
   author    = {He, Yi and Guo, Roland and Xing, Yunlong and Che, Xijia and Sun, Kun and Liu, Zhuotao and Xu, Ke and Li, Qi},
   title     = {Cross Container Attacks: The Bewildered {eBPF} on Clouds},
   booktitle = {32nd USENIX Security Symposium (USENIX Security 23)},
+  editor    = {Calandrino, Joseph A. and Troncoso, Carmela},
   year      = {2023},
+  month     = aug,
   pages     = {5971--5988},
   publisher = {USENIX Association},
   address   = {Anaheim, CA},
@@ -72,13 +86,13 @@
   volume    = {13},
   pages     = {155588--155604},
   doi       = {10.1109/ACCESS.2025.3605432},
-  publisher = {IEEE},
   url       = {https://ieeexplore.ieee.org/document/11146725/}
 }
 
 @online{aquasecurity_tracee,
   author  = {{Aqua Security}},
   title   = {Tracee Documentation},
+  year    = {2026},
   url     = {https://aquasecurity.github.io/tracee/latest/},
   urldate = {2026-07-17}
 }
@@ -86,6 +100,7 @@
 @online{aquasecurity_tracee_policies,
   author  = {{Aqua Security}},
   title   = {Tracee Policies: Overview},
+  year    = {2026},
   url     = {https://aquasecurity.github.io/tracee/dev/docs/policies/},
   urldate = {2026-07-17}
 }
@@ -93,7 +108,332 @@
 @online{aquasecurity_tracee_k8s_api_connection,
   author  = {{Aqua Security}},
   title   = {{K8s API Connection}},
+  year    = {2024},
   url     = {https://aquasecurity.github.io/tracee/v0.22/docs/events/builtin/signatures/kubernetes_api_connection/},
   urldate = {2026-07-17},
   note    = {Tracee v0.22 built-in signature documentation}
+}
+
+@online{linux_tracing_index,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {Linux Tracing Technologies},
+  year    = {2026},
+  url     = {https://docs.kernel.org/trace/index.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_tracepoints,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {Using the Linux Kernel Tracepoints},
+  year    = {2026},
+  url     = {https://docs.kernel.org/trace/tracepoints.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_kprobes,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {Kernel Probes (Kprobes)},
+  year    = {2026},
+  url     = {https://docs.kernel.org/trace/kprobes.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_lsm_development,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {Linux Security Module Development},
+  year    = {2026},
+  url     = {https://docs.kernel.org/security/lsm-development.html},
+  urldate = {2026-07-27}
+}
+
+@techreport{rfc9669_bpf_isa,
+  author      = {Thaler, Dave},
+  title       = {{BPF} Instruction Set Architecture ({ISA})},
+  institution = {Internet Engineering Task Force},
+  type        = {RFC},
+  number      = {9669},
+  year        = {2024},
+  month       = oct,
+  doi         = {10.17487/RFC9669},
+  url         = {https://www.rfc-editor.org/info/rfc9669}
+}
+
+@manual{linux_bpf_syscall,
+  author  = {{Linux man-pages project}},
+  title   = {\texttt{bpf(2)} --- Perform a Command on an Extended {BPF} Map or Program},
+  year    = {2026},
+  url     = {https://man7.org/linux/man-pages/man2/bpf.2.html},
+  urldate = {2026-07-27}
+}
+
+@manual{linux_bpf_helpers,
+  author  = {{Linux man-pages project}},
+  title   = {\texttt{bpf-helpers(7)} --- List of {eBPF} Helper Functions},
+  year    = {2026},
+  url     = {https://man7.org/linux/man-pages/man7/bpf-helpers.7.html},
+  urldate = {2026-07-27}
+}
+
+@inproceedings{gershuni2019prevail,
+  author    = {Gershuni, Elazar and Amit, Nadav and Gurfinkel, Arie and Narodytska, Nina and Navas, Jorge A. and Rinetzky, Noam and Ryzhyk, Leonid and Sagiv, Mooly},
+  editor    = {McKinley, Kathryn S. and Fisher, Kathleen},
+  title     = {Simple and Precise Static Analysis of Untrusted {Linux} Kernel Extensions},
+  booktitle = {Proceedings of the 40th ACM SIGPLAN Conference on Programming Language Design and Implementation},
+  series    = {PLDI '19},
+  year      = {2019},
+  pages     = {1069--1084},
+  publisher = {Association for Computing Machinery},
+  doi       = {10.1145/3314221.3314590},
+  url       = {https://doi.org/10.1145/3314221.3314590}
+}
+
+@online{linux_bpf_design_qa,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {{BPF} Design Q\&A},
+  year    = {2026},
+  url     = {https://docs.kernel.org/bpf/bpf_design_QA.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_bpf_jit_sysctl,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {Documentation for \texttt{/proc/sys/net/}: {BPF JIT} Controls},
+  year    = {2026},
+  url     = {https://docs.kernel.org/admin-guide/sysctl/net.html#bpf-jit-enable},
+  urldate = {2026-07-27}
+}
+
+@online{linux_libbpf_program_types,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {Program Types and {ELF} Sections},
+  year    = {2026},
+  url     = {https://docs.kernel.org/bpf/libbpf/program_types.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_bpf_maps,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {{BPF} Maps},
+  year    = {2026},
+  url     = {https://docs.kernel.org/bpf/maps.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_perf_ring_buffer,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {Perf Ring Buffer},
+  year    = {2026},
+  url     = {https://docs.kernel.org/userspace-api/perf_ring_buffer.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_bpf_ringbuf,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {{BPF} Ring Buffer},
+  year    = {2026},
+  url     = {https://docs.kernel.org/bpf/ringbuf.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_btf,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {{BPF} Type Format ({BTF})},
+  year    = {2026},
+  url     = {https://docs.kernel.org/bpf/btf.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_bpf_llvm_relocations,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {{BPF LLVM} Relocations},
+  year    = {2026},
+  url     = {https://docs.kernel.org/bpf/llvm_reloc.html},
+  urldate = {2026-07-27}
+}
+
+@online{linux_libbpf_overview,
+  author  = {{The Linux Kernel Documentation}},
+  title   = {\texttt{libbpf} Overview},
+  year    = {2026},
+  url     = {https://docs.kernel.org/bpf/libbpf/libbpf_overview.html},
+  urldate = {2026-07-27}
+}
+
+@techreport{scarfone2007idps,
+  author      = {Scarfone, Karen and Mell, Peter},
+  title       = {Guide to Intrusion Detection and Prevention Systems ({IDPS})},
+  institution = {National Institute of Standards and Technology},
+  type        = {Special Publication},
+  number      = {800-94},
+  year        = {2007},
+  month       = feb,
+  doi         = {10.6028/NIST.SP.800-94},
+  url         = {https://doi.org/10.6028/NIST.SP.800-94}
+}
+
+@article{cugola2012processing,
+  author  = {Cugola, Gianpaolo and Margara, Alessandro},
+  title   = {Processing Flows of Information: From Data Stream to Complex Event Processing},
+  journal = {ACM Computing Surveys},
+  year    = {2012},
+  volume  = {44},
+  number  = {3},
+  pages   = {15:1--15:62},
+  month   = jun,
+  doi     = {10.1145/2187671.2187677}
+}
+
+@inproceedings{agrawal2008eventstreams,
+  author    = {Agrawal, Jagrati and Diao, Yanlei and Gyllstrom, Daniel and Immerman, Neil},
+  editor    = {Wang, Jason Tsong-Li},
+  title     = {Efficient Pattern Matching over Event Streams},
+  booktitle = {Proceedings of the 2008 ACM SIGMOD International Conference on Management of Data},
+  year      = {2008},
+  pages     = {147--160},
+  publisher = {Association for Computing Machinery},
+  address   = {New York, NY, USA},
+  isbn      = {978-1-60558-102-6},
+  doi       = {10.1145/1376616.1376634}
+}
+
+@online{mitre2026attackresources,
+  author  = {{MITRE Corporation}},
+  title   = {Get Started with {MITRE ATT\&CK}},
+  year    = {2026},
+  url     = {https://attack.mitre.org/resources/},
+  urldate = {2026-07-27}
+}
+
+@online{mitre2026attackfaq,
+  author  = {{MITRE Corporation}},
+  title   = {{MITRE ATT\&CK} Frequently Asked Questions},
+  year    = {2026},
+  url     = {https://attack.mitre.org/resources/faq/},
+  urldate = {2026-07-27}
+}
+
+@online{aquasecurity_tracee_events,
+  author  = {{Aqua Security}},
+  title   = {Tracee Events},
+  year    = {2026},
+  url     = {https://aquasecurity.github.io/tracee/dev/docs/events/},
+  urldate = {2026-07-27},
+  note    = {Official Tracee development documentation}
+}
+
+@online{aquasecurity_tracee_detectors,
+  author  = {{Aqua Security}},
+  title   = {Tracee Detectors},
+  year    = {2026},
+  url     = {https://aquasecurity.github.io/tracee/dev/docs/detectors/},
+  urldate = {2026-07-27},
+  note    = {Official Tracee development documentation}
+}
+
+@online{aquasecurity_tracee_detector_api,
+  author  = {{Aqua Security}},
+  title   = {Tracee Detector {API} Reference},
+  year    = {2026},
+  url     = {https://aquasecurity.github.io/tracee/dev/docs/detectors/api-reference/},
+  urldate = {2026-07-27},
+  note    = {Official Tracee development documentation}
+}
+
+@online{aquasecurity_tracee_output,
+  author  = {{Aqua Security}},
+  title   = {Tracee Output Configuration},
+  year    = {2026},
+  url     = {https://aquasecurity.github.io/tracee/dev/docs/outputs/},
+  urldate = {2026-07-27},
+  note    = {Official Tracee development documentation}
+}
+
+@online{falcosecurity_falco_event_sources,
+  author  = {{The Falco Project Authors}},
+  title   = {Falco Event Sources},
+  year    = {2026},
+  url     = {https://falco.org/docs/concepts/event-sources/},
+  urldate = {2026-07-27},
+  note    = {Official Falco documentation}
+}
+
+@online{falcosecurity_falco_kernel_architecture,
+  author  = {{The Falco Project Authors}},
+  title   = {Falco Kernel Event Architecture},
+  year    = {2026},
+  url     = {https://falco.org/docs/concepts/event-sources/kernel/architecture/},
+  urldate = {2026-07-27},
+  note    = {Official Falco documentation}
+}
+
+@online{falcosecurity_falco_rules,
+  author  = {{The Falco Project Authors}},
+  title   = {Falco Rules},
+  year    = {2026},
+  url     = {https://falco.org/docs/concepts/rules/},
+  urldate = {2026-07-27},
+  note    = {Official Falco documentation}
+}
+
+@online{falcosecurity_falco_rule_conditions,
+  author  = {{The Falco Project Authors}},
+  title   = {Falco Rule Conditions},
+  year    = {2026},
+  url     = {https://falco.org/docs/concepts/rules/conditions/},
+  urldate = {2026-07-27},
+  note    = {Official Falco documentation}
+}
+
+@online{falcosecurity_falco_outputs,
+  author  = {{The Falco Project Authors}},
+  title   = {Falco Outputs},
+  year    = {2026},
+  url     = {https://falco.org/docs/concepts/outputs/},
+  urldate = {2026-07-27},
+  note    = {Official Falco documentation}
+}
+
+@online{cilium_tetragon_tracing_policy,
+  author  = {{The Tetragon Authors}},
+  title   = {Tetragon Tracing Policies},
+  year    = {2026},
+  url     = {https://tetragon.io/docs/concepts/tracing-policy/},
+  urldate = {2026-07-27},
+  note    = {Official Tetragon documentation}
+}
+
+@online{cilium_tetragon_selectors,
+  author  = {{The Tetragon Authors}},
+  title   = {Tetragon Tracing Policy Selectors},
+  year    = {2026},
+  url     = {https://tetragon.io/docs/concepts/tracing-policy/selectors/},
+  urldate = {2026-07-27},
+  note    = {Official Tetragon documentation}
+}
+
+@online{cilium_tetragon_events,
+  author  = {{The Tetragon Authors}},
+  title   = {Tetragon Events},
+  year    = {2026},
+  url     = {https://tetragon.io/docs/concepts/events/},
+  urldate = {2026-07-27},
+  note    = {Official Tetragon documentation}
+}
+
+@online{cilium_tetragon_enforcement,
+  author  = {{The Tetragon Authors}},
+  title   = {Tetragon Enforcement},
+  year    = {2026},
+  url     = {https://tetragon.io/docs/concepts/enforcement/},
+  urldate = {2026-07-27},
+  note    = {Official Tetragon documentation}
+}
+
+@online{cilium_tetragon_requirements,
+  author  = {{The Tetragon Authors}},
+  title   = {Tetragon Installation {FAQ}},
+  year    = {2026},
+  url     = {https://tetragon.io/docs/installation/faq/},
+  urldate = {2026-07-27},
+  note    = {Official Tetragon documentation}
 }
