@@ -35,29 +35,57 @@ not identify the final kernel object or security decision
 
 \medskip
 \noindent\textbf{Tracepoints and raw tracepoints.}
-A tracepoint is an explicit instrumentation site defined in the kernel source
-by kernel developers. When execution reaches an enabled tracepoint, the kernel
-invokes the registered consumer and supplies the fields declared for that
-event. Tracepoints therefore provide named events and a deliberately exposed
-context, which is generally less coupled to private function implementations
-than dynamic probing. Their principal limitation is coverage: a monitor can use
-only the tracepoints that the target kernel defines. Raw tracepoints expose a
-lower-level version of this mechanism. They perform less argument preparation
-before invoking an attached eBPF program, but the program must interpret the
-raw context correctly and consequently assumes more responsibility for its
-decoding \cite{linux_tracepoints,linux_libbpf_program_types}.
+A tracepoint is a static observation point deliberately inserted into the
+kernel source by kernel developers. It has a name, belongs to an event
+category, and defines the data made available when that point is reached. A
+tracepoint remains inactive until a tracing component is attached to it. In an
+eBPF-based monitor, this component is an eBPF program loaded from user space
+and attached to the selected tracepoint. Each time kernel execution reaches
+that point, the kernel invokes the attached program and provides a
+tracepoint-specific context containing the declared event fields.
+
+A regular tracepoint gives the eBPF program a structured event context whose
+layout follows the format exported for that tracepoint. A raw tracepoint refers
+to the same underlying kernel instrumentation site, but exposes the original
+arguments passed by the kernel to that site with less intermediate
+transformation. This reduces preparation performed before the eBPF program
+runs, while requiring the program to know how each raw argument must be
+interpreted. Tracepoints are therefore explicit and comparatively stable
+observation points, whereas raw tracepoints trade some of that abstraction for
+more direct access to the underlying arguments. Both mechanisms are limited to
+the tracepoints actually provided by the target kernel
+\cite{linux_tracepoints,linux_libbpf_program_types}.
 
 \medskip
 \noindent\textbf{Kprobes and kretprobes.}
-A kprobe dynamically associates a handler with a kernel instruction, commonly
-identified through the symbol of a kernel function. When execution reaches
-that location, the registered eBPF program receives a processor-register
-context from which function arguments can be recovered according to the target
-architecture and calling convention. A kretprobe complements this mechanism by
-running when an instrumented function returns, making its return value
-observable. Kprobes provide access to kernel locations for which no tracepoint
-exists, but they are more sensitive to renamed symbols, changed function
-signatures, compiler transformations, and differences between kernel builds
+A kprobe is a dynamic probe placed at a selected kernel instruction at run
+time. Monitoring tools usually identify that instruction through the symbol of
+a kernel function and place the probe at its entry. Unlike a tracepoint, the
+observation point does not need to have been prepared explicitly by the kernel
+developer. When execution reaches the probed instruction, the kernel
+temporarily transfers control to the probing infrastructure, which invokes the
+attached eBPF program before normal execution continues. The program receives
+a snapshot of the processor-register state. Function arguments are not
+presented as a tracepoint-specific event structure; they must be recovered from
+the appropriate registers according to the architecture and calling
+convention.
+
+A kretprobe observes the corresponding function-return path. It causes an
+attached program to run when an invocation of the probed function finishes and
+makes the return value available through the register context. A kprobe can
+therefore describe the operation requested at function entry, while a
+kretprobe can reveal the result produced at function exit. Entry and return
+records are separate observations: when both the original arguments and the
+result are required in one logical event, the monitoring system must save the
+entry data and correlate it with the return observation, commonly by using the
+current thread identity.
+
+Kprobes and kretprobes provide access to functions for which no tracepoint
+exists, but this flexibility increases coupling to kernel implementation
+details. A renamed or inlined function, a changed signature, a different
+calling convention, or an unavailable symbol can invalidate the attachment or
+the argument-decoding logic. They are therefore powerful dynamic mechanisms,
+but generally require more target-specific validation than tracepoints
 \cite{linux_kprobes}.
 
 \medskip
@@ -77,6 +105,72 @@ still does not necessarily reveal the final outcome; when the result matters,
 it must be obtained from a compatible return-side observation
 \cite{linux_lsm_development,linux_libbpf_program_types,linux_kprobes}.
 
+\begin{table}[htbp]
+      \centering
+      \small
+      \renewcommand{\arraystretch}{1.25}
+      \caption[Comparison of Linux kernel observation mechanisms]
+      {Comparison of the principal Linux kernel observation mechanisms
+      \cite{linux_tracepoints,linux_kprobes,linux_lsm_development,
+      linux_libbpf_program_types}.}
+      \label{tab:kernel-observation-mechanisms}
+
+      \begin{tabularx}{\textwidth}{
+          @{}
+          >{\raggedright\arraybackslash}p{0.17\textwidth}
+          >{\raggedright\arraybackslash}p{0.22\textwidth}
+          >{\raggedright\arraybackslash}X
+          >{\raggedright\arraybackslash}p{0.25\textwidth}
+          @{}
+      }
+          \toprule
+          \textbf{Mechanism} &
+          \textbf{Observation point} &
+          \textbf{Available information} &
+          \textbf{Main trade-off} \\
+          \midrule
+
+          System-call tracepoint &
+          Entry or exit of a system call &
+          Original system-call arguments at entry, or the return value at exit &
+          Provides broad process-level visibility, but limited information about
+          internal kernel processing. \\
+
+          Tracepoint &
+          Static point explicitly defined in the kernel source &
+          Structured, event-specific context declared by the kernel &
+          Offers a comparatively stable interface, but can be used only where
+          the target kernel provides a suitable tracepoint. \\
+
+          Raw tracepoint &
+          Lower-level interface to an existing tracepoint &
+          Original arguments passed to the tracepoint with less preprocessing &
+          Reduces intermediate processing, but requires more manual and
+          kernel-aware argument decoding. \\
+
+          Kprobe &
+          Dynamically selected kernel instruction, commonly a function entry &
+          Processor-register context from which function arguments can be
+          recovered &
+          Can observe functions without tracepoints, but depends more strongly
+          on kernel symbols, signatures, and calling conventions. \\
+
+          Kretprobe &
+          Return from a dynamically probed kernel function &
+          Function return value and processor-register context &
+          Reveals operation results, but entry arguments and return values must
+          be correlated explicitly when both are required. \\
+
+          LSM hook &
+          Kernel security mediation point &
+          Security-relevant operation context and resolved kernel objects &
+          Provides richer security semantics, but the available attachment
+          mechanisms depend on the capabilities of the target kernel. \\
+
+          \bottomrule
+      \end{tabularx}
+  \end{table}
+
 \medskip
 \noindent\textbf{The role of eBPF.}
 eBPF is the execution facility attached to an observation point, not a
@@ -87,28 +181,35 @@ or submit an event to user space. Consequently, ``tracepoint'', ``kprobe'',
 ``LSM hook'', and ``eBPF program'' describe different parts of the same
 monitoring path \cite{linux2024ebpfuserspaceapi,linux_libbpf_program_types}.
 
-These mechanisms are complementary. System-call tracepoints describe requests
+These mechanisms are complementary. System-call describe requests
 and results at the user--kernel boundary; general tracepoints expose
 kernel-defined events; kprobes and kretprobes provide dynamic access to
 function entry and return; and LSM-related hooks expose security mediation
 points. A runtime monitor combines them according to the required semantics,
 available target-kernel features, and acceptable coupling to kernel internals.
-The engineering objective is therefore not to instrument every possible
-location, but to select observation points that provide sufficient and
+The engineering objective is to select observation points that provide sufficient and
 reliable evidence for the intended security analysis
 \cite{linux_tracing_index,her2025ebpfsecuritytools}.
 
 \section{eBPF Fundamentals}
 \label{sec:ebpf-fundamentals}
 
-\gls{ebpf}, historically referred to as extended BPF, is a Linux kernel
-facility for executing constrained programs in response to supported events.
-The contemporary instruction-set specification treats ``eBPF'' as a
-standalone technology name rather than an acronym. Programs are loaded from
-user space, checked by the kernel, and associated with a program type and an
-attachment point. This model allows event-specific collection and filtering to
-run close to the source while retaining a user-space component for control,
-decoding, and analysis \cite{rfc9669_bpf_isa,linux2024ebpfuserspaceapi}.
+\gls{ebpf} is a modern technology that makes the Linux kernel programmable at
+runtime. It allows small programs to be loaded from user space and executed
+inside the kernel when a selected event occurs. Before execution, the kernel
+verifies that each program respects the safety constraints associated with its
+program type and intended attachment point
+\cite{rfc9669_bpf_isa,linux2024ebpfuserspaceapi}.
+
+This approach makes it possible to extend kernel behaviour without modifying
+the kernel source or developing a traditional kernel module for each new
+functionality. eBPF programs can be loaded, replaced, and specialised for
+different purposes, including system observability, performance analysis,
+network processing, and security. Its principal benefit is therefore
+controlled programmability: functionality can be introduced close to the
+kernel operations of interest while remaining subject to verification and
+well-defined execution constraints
+\cite{gbadamosi2024ebpf,linux2026ebpfverifier}.
 
 \subsection{Execution Model, Verifier and JIT Compilation}
 \label{subsec:ebpf-execution-verifier-jit}
@@ -121,13 +222,27 @@ program does not execute as unrestricted kernel code: its available context,
 memory accesses, and callable functions depend on its program type
 \cite{rfc9669_bpf_isa,linux_bpf_helpers}.
 
-Before accepting a program, the verifier performs static analysis over its
-control flow. It tracks register and stack state, distinguishes scalar values
-from different classes of pointers, checks bounds and alignment, validates
-arguments passed to helper functions, and rejects paths that may access invalid
-memory or leak resources. State pruning makes this path-sensitive analysis
-tractable by avoiding the repeated exploration of verifier states that are
-already known to be safe \cite{linux2026ebpfverifier,gershuni2019prevail}.
+Because the programs described above are loaded from user space but execute
+inside the kernel, they cannot be allowed to run without first establishing
+that they respect the kernel's safety constraints. An unsafe memory access or
+an invalid operation in this context could affect the stability and security of
+the entire system. Linux addresses this requirement through the eBPF verifier,
+the kernel component responsible for deciding whether a submitted program can
+be accepted for execution. Rather than trusting the program, the verifier
+analyses it during the loading process and before permitting its execution; a
+program that does not satisfy the required safety conditions is rejected and
+never executed.
+
+The verifier performs a path-sensitive static analysis of the program's control
+flow. It follows the possible execution paths while tracking the state of
+registers and stack locations, distinguishing scalar values from different
+classes of pointers, checking memory bounds and alignment, and validating the
+arguments supplied to helper functions. Paths that may access invalid memory,
+use uninitialised values, or leave kernel-managed resources unreleased are
+rejected. To avoid analysing equivalent situations repeatedly, the verifier
+uses state pruning: when a previously accepted verifier state already covers a
+new state reached at the same instruction, the redundant path does not need to
+be explored again \cite{linux2026ebpfverifier,gershuni2019prevail}.
 
 Verification is a necessary safety gate, not a proof that a program implements
 the intended monitoring semantics. A verifier-accepted program may still read
@@ -138,14 +253,40 @@ for a particular kernel. Verifier behaviour is therefore both a security
 mechanism and a practical compatibility constraint
 \cite{linux2026ebpfverifier,linux_bpf_design_qa}.
 
-After acceptance, a program may be interpreted or translated into native
-machine code by a \gls{jit} compiler, depending on the architecture and kernel
-configuration. JIT compilation avoids interpreting every BPF instruction each
-time the hook is reached, but it does not remove the cost of hook execution,
-map access, event construction, or transport. The operational cost of an eBPF
-monitor must consequently be measured for its actual workload and target
-kernel rather than inferred from the availability of a JIT compiler
-\cite{linux_bpf_jit_sysctl,gbadamosi2024ebpf}.
+Once the verifier accepts a program, the kernel may pass its eBPF instructions
+to an architecture-specific \gls{jit} compiler. The compiler translates the
+verified eBPF bytecode into native machine instructions for the host
+architecture. The resulting native code can then be executed directly whenever
+the program is invoked, avoiding the overhead of processing the eBPF
+instructions individually at each execution
+\cite{linux_bpf_execution_modes,linux_bpf_jit_sysctl}.
+
+JIT compilation does not alter the functionality authorised by the verifier.
+The translation is performed only after verification and preserves the
+semantics of the accepted eBPF program. Its availability depends on the host
+architecture, the kernel build configuration, and the runtime JIT settings.
+
+\begin{figure}[htbp]
+    \centering
+
+    \includegraphics[
+        width=0.90\textwidth,
+        height=0.65\textheight,
+        keepaspectratio
+    ]{figures/chapter2/eBPF-schema.png}
+
+    \caption[High-level eBPF execution workflow]
+    {High-level eBPF execution workflow, from user-space compilation and
+    kernel loading to verification, attachment, and event-driven execution.}
+
+    \label{fig:ebpf-execution-workflow}
+\end{figure}
+
+This completes the basic eBPF execution path considered here. A program is
+compiled into eBPF instructions, submitted to the kernel, analysed by the
+verifier and, if accepted, translated into native machine code and executed
+whenever its associated hook or execution context is invoked
+\cite{gbadamosi2024ebpf}.
 
 \subsection{Program Types, Hooks and Attachment Mechanisms}
 \label{subsec:ebpf-program-types-hooks-attachment}
