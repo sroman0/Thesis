@@ -5,46 +5,97 @@
 \label{sec:linux-kernel-observability}
 
 Runtime monitoring requires evidence about operations while they are being
-executed. Application logs can describe domain-specific actions, but their
-content depends on decisions made by each application. The Linux kernel offers
-a complementary observation layer because it mediates process creation,
+executed. Application logs describe domain-specific actions, but their content
+depends on what each application chooses to record. The Linux kernel offers a
+complementary observation layer because it mediates process creation,
 credential changes, file access, memory management, inter-process
 communication, and other security-relevant operations. Kernel observability is
-therefore useful when the monitored behaviour crosses application boundaries
-or is not represented consistently in application logs
+therefore useful when behaviour crosses application boundaries or is not
+represented consistently in application logs
 \cite{linux_tracing_index,gbadamosi2024ebpf}.
 
-Linux exposes several instrumentation mechanisms rather than one universal
-event source. Tracepoints are explicit, statically defined sites placed by
-kernel developers. They offer named events and comparatively stable argument
-layouts, but they are available only where the kernel contains an appropriate
-tracepoint. Kprobes and kretprobes can instrument the entry and return of many
-kernel functions dynamically, which provides broader flexibility at the cost
-of a stronger dependency on kernel symbols, function signatures, and internal
-implementation details \cite{linux_tracepoints,linux_kprobes}. System-call
-tracepoints provide another important view: they expose the boundary through
-which user-space processes request kernel services, although a system call does
-not necessarily identify the deeper security decision or the final internal
-object affected by that request.
+Linux does not expose all runtime activity through one universal event source.
+Instead, it provides instrumentation points at different layers of kernel
+execution. Each mechanism determines when monitoring code runs, which context
+is available, and how strongly the observation depends on kernel internals.
 
-Security-sensitive operations can also be observed near Linux Security Module
-hooks. The \gls{lsm} framework defines mediation points used by security modules
-when the kernel is about to perform operations involving credentials, files,
-processes, sockets, and other protected objects. Observing these points can
-provide semantically richer evidence than observing the originating system call
-alone. However, an observed hook invocation does not automatically reveal the
-eventual result of the operation: where success or failure matters, entry-side
-information must be correlated with a suitable return-side observation
-\cite{linux_lsm_development,linux_kprobes}.
+\medskip
+\noindent\textbf{System-call observation.}
+A system call is the controlled interface through which a user-space process
+requests a service from the kernel. It is not itself an instrumentation
+mechanism. Monitoring systems commonly observe this boundary through
+system-call tracepoints, such as entry and exit events. An entry event exposes
+the requested operation and its original arguments, whereas an exit event
+exposes the returned result. Correlating the two can distinguish an attempted
+operation from one that completed successfully. This view is broad and
+process-oriented, but it remains close to the user-space request: one system
+call may traverse several internal functions, and its original arguments may
+not identify the final kernel object or security decision
+\cite{linux_tracepoints,linux_tracing_index}.
 
-These mechanisms are complementary. Tracepoints favour an explicit event
-contract, kprobes offer dynamic reach into kernel functions, system-call hooks
-describe the user-to-kernel interface, and LSM-related hooks expose security
-mediation points. A runtime monitor may combine them to obtain the required
-coverage, but each additional source introduces compatibility, decoding, and
-performance considerations. The relevant engineering question is consequently
-not how to collect every possible kernel action, but which observation points
-provide sufficient semantics for the intended security analysis
+\medskip
+\noindent\textbf{Tracepoints and raw tracepoints.}
+A tracepoint is an explicit instrumentation site defined in the kernel source
+by kernel developers. When execution reaches an enabled tracepoint, the kernel
+invokes the registered consumer and supplies the fields declared for that
+event. Tracepoints therefore provide named events and a deliberately exposed
+context, which is generally less coupled to private function implementations
+than dynamic probing. Their principal limitation is coverage: a monitor can use
+only the tracepoints that the target kernel defines. Raw tracepoints expose a
+lower-level version of this mechanism. They perform less argument preparation
+before invoking an attached eBPF program, but the program must interpret the
+raw context correctly and consequently assumes more responsibility for its
+decoding \cite{linux_tracepoints,linux_libbpf_program_types}.
+
+\medskip
+\noindent\textbf{Kprobes and kretprobes.}
+A kprobe dynamically associates a handler with a kernel instruction, commonly
+identified through the symbol of a kernel function. When execution reaches
+that location, the registered eBPF program receives a processor-register
+context from which function arguments can be recovered according to the target
+architecture and calling convention. A kretprobe complements this mechanism by
+running when an instrumented function returns, making its return value
+observable. Kprobes provide access to kernel locations for which no tracepoint
+exists, but they are more sensitive to renamed symbols, changed function
+signatures, compiler transformations, and differences between kernel builds
+\cite{linux_kprobes}.
+
+\medskip
+\noindent\textbf{Linux Security Module hooks.}
+The \gls{lsm} framework inserts security mediation points into kernel
+operations involving files, credentials, processes, sockets, and other
+protected objects. At these points, registered security modules can inspect an
+operation and, for hooks with authorisation semantics, permit or reject it.
+Observing an LSM-related function can therefore expose a resolved kernel object
+and the security-relevant stage of an operation, rather than only the original
+system-call request. Two concepts should not be confused: an LSM hook is the
+kernel mediation point, while an eBPF LSM program is one possible program type
+for attaching logic to supported hooks. On kernels where that program type is
+unavailable or unsuitable, monitoring tools may instead observe the
+corresponding security function through a kprobe. An entry-side observation
+still does not necessarily reveal the final outcome; when the result matters,
+it must be obtained from a compatible return-side observation
+\cite{linux_lsm_development,linux_libbpf_program_types,linux_kprobes}.
+
+\medskip
+\noindent\textbf{The role of eBPF.}
+eBPF is the execution facility attached to an observation point, not a
+replacement name for the observation point itself. The selected hook causes an
+eBPF program to run and determines the context received by that program. The
+program can then extract selected fields, apply an early filter, update maps,
+or submit an event to user space. Consequently, ``tracepoint'', ``kprobe'',
+``LSM hook'', and ``eBPF program'' describe different parts of the same
+monitoring path \cite{linux2024ebpfuserspaceapi,linux_libbpf_program_types}.
+
+These mechanisms are complementary. System-call tracepoints describe requests
+and results at the user--kernel boundary; general tracepoints expose
+kernel-defined events; kprobes and kretprobes provide dynamic access to
+function entry and return; and LSM-related hooks expose security mediation
+points. A runtime monitor combines them according to the required semantics,
+available target-kernel features, and acceptable coupling to kernel internals.
+The engineering objective is therefore not to instrument every possible
+location, but to select observation points that provide sufficient and
+reliable evidence for the intended security analysis
 \cite{linux_tracing_index,her2025ebpfsecuritytools}.
 
 \section{eBPF Fundamentals}
