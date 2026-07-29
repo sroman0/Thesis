@@ -500,7 +500,7 @@ even when the individual observations may not be unusual
     \caption[Anomaly Detection: Type of Anomalies]
     {Anomaly Detection, Type of Anomalies.\cite{einar2021anomalypredictions}}
 
-    \label{fig:ebpf-execution-workflow}
+    \label{fig:anomaly-types}
 \end{figure}
 
 This taxonomy is useful for kernel telemetry. A single operation can be
@@ -543,8 +543,9 @@ match. A collective detector additionally needs state: it must retain enough
 information to decide whether later events complete a potentially malicious pattern.
 Correlation keys constrain which observations may belong to the same sequence,
 and a time window bounds how long partial matches remain relevant. These
-choices reduce accidental correlation between unrelated processes, although
-they do not by themselves prove that every emitted alert is malicious
+choices reduce accidental correlation between observations that do not share
+the identity required by the detector, although they do not by themselves
+prove that every emitted alert is malicious
 \cite{cugola2012processing,agrawal2008eventstreams}.
 
 An alert is a higher-level result derived from one or more source events. A
@@ -665,7 +666,7 @@ Falco shows a mature single-event rule and alert model, while Tetragon shows the
 advantages and platform requirements of in-kernel selectors and enforcement.
 The prototype considered in this thesis instead retains enforcement outside its
 scope and concentrates on local observation, normalisation, deterministic
-point rules, and short process-aware collective patterns.
+point rules, and short, locally correlated collective patterns.
 
 \section{Positioning of the Proposed Work}
 \label{sec:positioning-proposed-work}
@@ -683,9 +684,13 @@ apply a minimal early filter, while a Go runtime normalises the resulting event
 stream. Declarative policies define the event domain, and automatically
 activated YAML detectors evaluate deterministic predicates over individual
 events or short ordered patterns. Collective detection is intentionally local
-and bounded: it uses process identity and immediate parent information rather
-than a persistent, cluster-wide process graph. Alerts preserve their source
-evidence and carry ATT\&CK metadata as a common classification vocabulary.
+and bounded, but it is not restricted to process identity. Detector-specific
+correlation strategies can associate observations through stable process
+identity, immediate parent relationships, file-resource identity, local cgroup
+identity, or composite combinations of these dimensions. This enables selected
+cross-process detections without requiring a persistent process graph or
+cluster-wide state. Alerts preserve their source evidence and carry ATT\&CK
+metadata as a common classification vocabulary.
 
 This combination should be understood as an integration and engineering
 contribution rather than a claim that its individual mechanisms are
