@@ -1,0 +1,734 @@
+\chapter{Requirements and System Design}
+\label{ch:requirements-system-design}
+
+The previous chapter established the technical foundations and related-work
+context for the proposed monitoring system. This chapter translates that
+background into explicit requirements and architectural decisions. Its purpose
+is to explain what the system is expected to do, which constraints shape its
+design, and why responsibilities are divided between kernel space and user
+space.
+
+The design follows one central principle: kernel programs should perform only
+the bounded work that benefits directly from proximity to the observed
+operation, while the more changeable interpretation and presentation logic
+should remain in user space. An explicit event contract connects these two
+domains. Policies then constrain the admitted event stream, and independently
+loaded detectors evaluate either individual observations or short ordered
+sequences. This progression connects the requirements to the architecture
+without anticipating the implementation details presented in Chapter~4 or the
+experimental evidence presented in Chapter~5.
+
+\section{Design Goals and Constraints}
+\label{sec:design-goals-constraints}
+
+The system is intended to provide focused host-level visibility rather than an
+exhaustive account of all kernel activity. Its event domain consequently
+centres on process execution and security-relevant operations involving
+credentials, files, memory, namespaces, capabilities, and kernel mechanisms.
+The architecture must make this domain selectable, convert heterogeneous
+kernel observations into one typed event model, and support deterministic
+analysis without placing the entire detection model inside the eBPF programs.
+
+Three concerns influence every stage of the design. First, compatibility must
+be established on the concrete enterprise kernel rather than inferred from an
+upstream version. Second, high-frequency observations require early scope
+reduction and bounded state. Third, failures at the producer, transport,
+decoder, or detector boundary must remain visible so that missing telemetry is
+not mistaken for an absence of monitored activity.
+
+\subsection{Target Environment and Compatibility Assumptions}
+\label{subsec:target-environment-assumptions}
+
+The reference environment is Rocky Linux 8.10 on x86-64. The exact kernel
+build is \path{4.18.0-553.109.1.el8_10.x86_64}. This target belongs to a long-lived
+enterprise kernel line in which vendor fixes and selected features are
+backported while the reported upstream base version remains stable.
+Consequently, the version number alone is not sufficient to determine whether
+a hook, helper, program type, attachment mechanism, or verifier capability is
+available \cite{redhat2025backporting}.
+
+The design assumes that the monitored host exposes usable kernel
+\gls{btf} information and grants the privileges required to load and attach the
+selected programs. BTF and \gls{core} reduce dependence on compile-time kernel
+structure layouts by allowing compatible field accesses to be relocated for
+the deployed kernel. They do not provide facilities that the target lacks,
+bypass permissions, or ensure that a program will be accepted by its verifier
+\cite{linux_btf,linux_bpf_llvm_relocations,linux_libbpf_overview,
+linux2026ebpfverifier}. Each required attachment and access path must therefore
+be validated against the actual system.
+
+This target-aware position deliberately limits the portability claim. The
+architecture is CO-RE-assisted and is designed around the identified Rocky
+Linux environment; it is not assumed to support every distribution or kernel
+configuration unchanged. Where dynamic probes are used, symbol availability
+and compatible function signatures remain additional assumptions. These
+constraints motivate small kernel programs, explicit compatibility boundaries,
+and a user-space layer that can report loading or attachment failures before
+normal monitoring begins.
+
+\subsection{Functional Requirements}
+\label{subsec:functional-requirements}
+
+Table~\ref{tab:functional-requirements} summarises the binding functional
+requirements. They describe externally meaningful responsibilities rather than
+individual commands or source-code components.
+
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.18}
+    \begin{tabularx}{\textwidth}{
+        @{}
+        >{\raggedright\arraybackslash}p{0.11\textwidth}
+        >{\raggedright\arraybackslash}X
+        @{}
+    }
+        \toprule
+        \textbf{ID} & \textbf{Functional requirement} \\
+        \midrule
+        FR-01 &
+        Collect a selectable set of process- and security-relevant host
+        events. \\
+
+        FR-02 &
+        Resolve selected logical events into the producer and support probes
+        required to create them, while excluding unrelated registered
+        programs from loading and attachment. \\
+
+        FR-03 &
+        Transfer kernel records through the implemented perf-buffer channel
+        and decode them into normalised typed events through an explicit
+        shared contract. \\
+
+        FR-04 &
+        Load configurable policies that constrain the monitored event scope
+        and may narrow attachment when their event allowlists are exact. \\
+
+        FR-05 &
+        Load detectors independently from policies and evaluate deterministic
+        point conditions or bounded ordered collective sequences. \\
+
+        FR-06 &
+        Produce alerts that preserve the evidence responsible for a match and
+        propagate available MITRE ATT\&CK metadata. \\
+
+        FR-07 &
+        Keep raw event presentation, alert presentation, and operational
+        diagnostics as separate paths. \\
+
+        FR-08 &
+        Manage validation, startup, attachment, event consumption, observable
+        failures, cancellation, and orderly resource cleanup. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Functional requirements of the proposed system.}
+    \label{tab:functional-requirements}
+\end{table}
+
+These requirements form a connected pipeline. FR-01 and FR-02 define what is
+observed and which kernel programs are active. FR-03 establishes the
+producer--consumer boundary. FR-04 and FR-05 separate monitoring scope from
+detection logic, while FR-06 and FR-07 distinguish derived security results
+from telemetry and diagnostics. FR-08 applies across the whole lifecycle.
+
+The optional kernel-side UID guard is treated as one early reduction mechanism
+within FR-02, not as a separate kernel policy language. Likewise, container
+packaging is an implementation concern rather than a central functional
+requirement of the architecture. A possible future orchestrated deployment
+does not alter the host-local responsibilities defined here.
+
+\subsection{Non-Functional and Operational Requirements}
+\label{subsec:nonfunctional-operational-requirements}
+
+The non-functional and operational requirements in
+Table~\ref{tab:nonfunctional-requirements} constrain how the functional
+pipeline is realised and evaluated.
+
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.18}
+    \begin{tabularx}{\textwidth}{
+        @{}
+        >{\raggedright\arraybackslash}p{0.11\textwidth}
+        >{\raggedright\arraybackslash}X
+        @{}
+    }
+        \toprule
+        \textbf{ID} & \textbf{Non-functional or operational requirement} \\
+        \midrule
+        NFR-01 &
+        Operate on the identified enterprise-kernel target with explicit
+        compatibility assumptions and target validation. \\
+
+        NFR-02 &
+        Keep kernel execution and data extraction bounded and compatible with
+        the target verifier. \\
+
+        NFR-03 &
+        Maintain a consistent kernel-to-user-space event contract and fail
+        visibly on unknown or malformed records. \\
+
+        NFR-04 &
+        Keep detection deterministic, configuration-driven, and independent
+        from event presentation. \\
+
+        NFR-05 &
+        Bound incomplete collective state through short windows and a
+        per-detector key limit. \\
+
+        NFR-06 &
+        Expose transport loss, decoding failures, detector failures, and setup
+        errors through appropriate diagnostic paths. \\
+
+        NFR-07 &
+        Evaluate a steady-state user-space CPU objective below five per cent of
+        one core for explicitly defined representative profiles. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Non-functional and operational requirements.}
+    \label{tab:nonfunctional-requirements}
+\end{table}
+
+NFR-07 is deliberately phrased as an evaluation objective. It is not an
+unconditional guarantee for every workload, event combination, or
+instantaneous sample. Chapter~5 defines the profiles, warm-up periods, and
+measurements used to assess it. Similarly, NFR-05 bounds retained correlation
+keys and time, but the total memory demand also depends on the number and
+complexity of configured detectors and on the size of retained evidence.
+
+\section{Overall System Architecture}
+\label{sec:overall-system-architecture}
+
+The architecture is divided into a control path and a data path. The control
+path validates configuration, prepares policies and detectors, derives the
+effective event scope, and resolves logical events into physical programs
+before loading. The data path begins when an attached kernel hook is reached
+and ends with optional event or alert presentation. Operational diagnostics
+observe both paths without becoming the representation used for events or
+alerts.
+
+\subsection{Kernel-Space and User-Space Responsibilities}
+\label{subsec:kernel-userspace-responsibilities}
+
+Kernel space is responsible for observing selected operations, extracting
+bounded context and arguments, applying the optional exact-UID rejection,
+constructing a logical record, and serialising it for submission. A limited
+amount of temporary kernel state may join observations when an operation
+requires information from both entry and return. This does not amount to a
+kernel-resident policy or detector engine.
+
+User space owns the more changeable and semantically rich responsibilities. A
+Go runtime validates configuration, manages
+\texttt{libbpf} through \texttt{libbpfgo}, resolves probe dependencies, receives
+records, decodes typed arguments, normalises events, applies policy scope,
+dispatches detectors, and produces presentation and diagnostic outputs
+\cite{aquasecurity_libbpfgo}. Moving these responsibilities out of the kernel
+limits verifier-sensitive logic and allows rule definitions to evolve without
+recompiling each eBPF program.
+
+The boundary is therefore selective rather than absolute. User space decides
+which kernel programs are loaded and can configure a small kernel-side filter.
+Kernel programs may retain short-lived construction state, but they do not own
+the higher-level monitoring policy. Conversely, user-space analysis relies on
+the correctness of the records produced in the kernel and cannot recover an
+observation that was never submitted or was lost in transport.
+
+\subsection{End-to-End Event Lifecycle}
+\label{subsec:end-to-end-event-lifecycle}
+
+Before collection begins, configuration and rule definitions are validated.
+Where active policy rules provide an exact event allowlist, this scope may
+narrow the requested event set. The probe registry then resolves public
+logical events into the producer programs and internal dependencies needed to
+construct them. Unrelated registered programs are excluded from the loading
+and attachment path.
+
+Once monitoring is active, a selected hook invokes its eBPF program. The
+program may reject the event through the optional UID guard; otherwise it
+captures bounded data, constructs the binary record, and submits it through the
+perf buffer. The Go runtime decodes the record with the event registry, applies
+the configured event and process filters, and asks the policy layer whether the
+event belongs to the active scope. An admitted event may be presented as raw
+telemetry and is then offered to relevant detectors. A successful detector
+match produces an alert containing its source evidence.
+
+Figure~\ref{fig:system-responsibility-flow} summarises these two paths. The
+operational logging lane is separate because it reports lifecycle, attachment,
+transport, decoding, and detector failures rather than carrying monitored
+events.
+
+\begin{figure}[H]
+    \centering
+    \small
+    \fbox{%
+        \begin{minipage}{0.94\textwidth}
+            \textbf{Control path}\par
+            Configuration and rule validation
+            $\longrightarrow$ effective event scope
+            $\longrightarrow$ probe and dependency resolution
+            $\longrightarrow$ selective loading and attachment
+
+            \medskip
+            \hrule
+            \medskip
+
+            \begin{tabularx}{\textwidth}{
+                >{\centering\arraybackslash}X
+                >{\centering\arraybackslash}p{0.05\textwidth}
+                >{\centering\arraybackslash}X
+                >{\centering\arraybackslash}p{0.05\textwidth}
+                >{\centering\arraybackslash}X
+            }
+                \textbf{Kernel space} &
+                &
+                \textbf{Go user space} &
+                &
+                \textbf{Presentation} \\
+                \smallskip
+                Selected hook &
+                $\longrightarrow$ &
+                Perf-buffer reader &
+                $\longrightarrow$ &
+                Raw event output \\
+                eBPF capture &
+                &
+                Decoder and event registry &
+                &
+                Alert output \\
+                Optional UID rejection &
+                &
+                Policy event scope &
+                &
+                Evidence and ATT\&CK metadata \\
+                Binary serialisation &
+                &
+                Detector dispatch &
+                &
+                \\
+                Perf-buffer submission &
+                &
+                &
+                &
+            \end{tabularx}
+
+            \medskip
+            \hrule
+            \medskip
+
+            \textbf{Operational diagnostics}\par
+            A separate structured logging path reports setup, attachment,
+            transport loss, decoding, detector, output, and cleanup
+            diagnostics.
+        \end{minipage}%
+    }
+    \caption{Responsibility boundary and end-to-end flow of the proposed
+    monitoring system.}
+    \label{fig:system-responsibility-flow}
+\end{figure}
+
+The diagram is intentionally not a guarantee of total event ordering. Perf
+transport uses per-CPU buffering, and detector sequence order follows the order
+in which records reach the user-space engine. Transport and ordering boundaries
+are discussed further in Section~\ref{subsec:perf-buffer-failure-boundaries}.
+
+\section{Kernel-Space Collection Design}
+\label{sec:kernel-space-collection-design}
+
+Kernel instrumentation must expose evidence that is both meaningful for the
+logical event and obtainable on the target kernel. The design therefore does
+not prescribe one universal attachment mechanism. It combines available
+observation points while maintaining a stable event abstraction above them.
+
+\subsection{Hook Selection and Logical Events}
+\label{subsec:hook-selection-logical-events}
+
+Four criteria guide hook selection. The first is the semantic position of the
+observation: the hook must expose the request, resolved object, state
+transition, or security mediation stage needed by the event. The second is
+whether the result of the operation is required. An entry observation can
+describe an attempt, but a return-side observation is needed when success or
+failure changes the event's meaning.
+
+The third criterion is availability on the concrete target. Tracepoints offer
+explicit event interfaces when present, whereas dynamic probes extend coverage
+at the cost of stronger dependence on symbols, signatures, and calling
+conventions. The fourth criterion is expected cost and robustness.
+High-frequency generic hooks can provide shared coverage but place filtering on
+a hot path; a dedicated observation point is preferable when it provides the
+required semantics reliably. These trade-offs follow from the properties of
+the kernel mechanisms introduced in Chapter~2 rather than from an automatic
+runtime choice.
+
+The architecture distinguishes four related concepts. A physical hook is the
+kernel execution point. An eBPF probe is the compiled program attached to that
+point. A support probe is an internal program that preserves or supplies
+context needed by another program. A logical event is the stable observation
+exposed to the decoder, policies, detectors, and outputs.
+
+These concepts are not necessarily one-to-one. A single logical operation may
+require an entry probe to preserve request information and an exit probe to add
+its result. Several operation variants may also converge on one logical event.
+Conversely, selecting a public event may require internal support probes that
+do not define independently selectable or decodable events. Keeping attachment
+units separate from public event units prevents probe mechanics from becoming
+part of the user-facing event contract.
+
+\subsection{Early Event Selection and Filtering}
+\label{subsec:early-event-selection-filtering}
+
+Event selection begins with logical event names rather than individual eBPF
+programs. The registry expands the selected events into producer and support
+probes, after which unrelated registered programs are removed from the
+autoload set. Only the resolved programs are presented to the normal loading,
+verification, and attachment lifecycle. This design reduces active hooks and
+avoids verifying registered programs that cannot contribute to the requested
+event domain.
+
+This mechanism is selective loading, not arbitrary elimination of every
+unused section in the eBPF object. Its correctness depends on the registry
+describing all public producers and their dependencies consistently. It also
+does not remove the need for a later user-space gate: several physical
+programs can contribute to one event, and policy or process constraints may
+depend on information available only after decoding.
+
+An optional exact-UID guard provides a second, narrower reduction. When
+enabled, it rejects observations whose current effective UID differs from the
+configured value before full context enrichment and serialisation. This saves
+work for rejected observations, but intentionally supports only one equality
+condition. It is not a range filter, a namespace or workload selector, or a
+replacement for policy evaluation in user space.
+
+Policies can influence early selection only when their active allow rules
+produce an exact event scope. More specific policy constraints and suppression
+decisions remain in user space. Detector definitions are separate consumers:
+their declared event requirements are validated, but they are not
+automatically converted into additional probe dependencies. A deployment must
+therefore configure a policy or event scope that supplies the observations
+required by its loaded detectors.
+
+\section{Event Contract and Transport Design}
+\label{sec:event-contract-transport-design}
+
+The producer and consumer need a common representation that remains stable
+across heterogeneous event sources. The design uses a compact binary contract
+for transport and an explicit registry for semantic interpretation. These two
+parts must evolve together: compact records reduce per-event overhead, but
+they cannot be decoded safely when identifiers or schemas drift.
+
+\subsection{Stable Binary Event Contract}
+\label{subsec:stable-binary-event-contract}
+
+Each public record contains a common event context followed by a sequence of
+indexed, typed arguments. The common context provides the identity and
+provenance needed across event families, including process, host, namespace,
+and execution information. Event-specific arguments carry the values required
+to interpret the observed operation. Their indices connect the encoded values
+to the ordered schema held by the user-space event registry.
+
+The record is compact rather than fully self-describing. The producer emits an
+event identifier and indexed values, while the consumer supplies the event
+name, expected argument types, and argument order. This separation reduces
+repeated metadata in the transport path, but creates an explicit compatibility
+obligation between the C producer, Go decoder, event registry, and probe
+registry.
+
+The contract must satisfy three properties. First, both sides must agree on the
+common prefix. Second, every public event identifier must resolve to one
+decoder schema. Third, argument indices and encodings must remain compatible
+with that schema. An unknown identifier or structurally inconsistent record is
+therefore treated as a contract failure. It is reported and dropped before
+policy, detector, or presentation processing rather than being converted into
+an untrusted partial event.
+
+This design also separates structural and semantic processing. Binary decoding
+establishes record validity and typed values. Registry lookup supplies the
+logical event schema. Normalisation then presents one internal event model to
+policy, detector, and output components. The concrete layout, field offsets,
+buffer capacities, and compatibility corrections that enforce this contract
+are implementation evidence and are deferred to Chapter~4.
+
+\subsection{Perf-Buffer Transport and Failure Boundaries}
+\label{subsec:perf-buffer-failure-boundaries}
+
+The operational transport is a perf buffer backed by a perf-event array. This
+mechanism is available on the target kernel and is supported by the selected
+\texttt{libbpfgo} runtime stack. The BPF ring buffer discussed in Chapter~2 is
+not implemented in the current event path. This is a compatibility-driven
+engineering choice rather than a general claim that perf transport is
+preferable for every monitoring system.
+
+Perf transport provides asynchronous delivery from kernel producers to a
+user-space consumer through finite per-CPU buffers
+\cite{linux_perf_ring_buffer}. It can report that records were lost, but it
+does not provide durable queuing, retransmission, or reconstruction of the
+missing events. A submission failure in the eBPF program, a transport loss
+notification, and a decoder failure after delivery are therefore distinct
+conditions.
+
+The system exposes these boundaries through diagnostics. Loss notifications
+indicate that records were not delivered, while decoding errors indicate that
+a delivered record could not be interpreted through the active contract.
+Neither condition implies that the originating kernel operation failed to
+occur. Output and detector failures arise later and likewise do not alter the
+original operation.
+
+Per-CPU delivery also limits ordering claims. A local sequence detector uses
+the arrival order observed by the Go runtime; the architecture does not
+reconstruct a total causal order across CPUs. Short correlation windows and
+stable local identities reduce accidental associations, but ordering behaviour
+under concurrent load remains an evaluation concern for Chapter~5.
+
+\section{User-Space Runtime Design}
+\label{sec:user-space-runtime-design}
+
+The Go runtime coordinates kernel-facing resources and the higher-level event
+pipeline. Its components are organised around validation before resource
+acquisition, explicit ownership of the loaded runtime, and isolation of
+event-local failures from the main processing loop.
+
+\subsection{Loading, Attachment and Runtime Lifecycle}
+\label{subsec:loading-attachment-runtime-lifecycle}
+
+Startup proceeds through seven conceptual stages. Configuration and external
+rule definitions are first normalised and validated. The eBPF object and BTF
+source are then resolved. Next, policy information is used where possible to
+derive the effective event scope, and logical events are expanded into the
+required probes. The runtime creates the kernel object, excludes unrelated
+registered programs from autoload, and asks the kernel to relocate, verify, and
+load the remaining programs.
+
+After a successful load, the optional filter configuration is written, the
+perf-buffer consumer is started, and the selected programs are attached. The
+event loop then waits for records, loss notifications, cancellation, or a
+terminal runtime failure. This ordering prevents normal monitoring from
+starting with a partially accepted configuration or an incomplete set of
+attachments.
+
+Setup failures are fatal because the requested observation domain cannot be
+trusted when object loading, verification, transport initialisation, or
+attachment fails. Event-local failures are handled differently: an invalid
+record, detector error, or presentation error is reported and isolated so that
+later records can still be processed.
+
+Cancellation initiates the destruction of retained links and the closure of
+transport, cgroup, and object resources in an ordered sequence. The
+architecture promises that cleanup is attempted; it does not assume that every
+deferred cleanup or logging error is propagated as the final process result.
+This distinction is retained for the implementation discussion in Chapter~4.
+
+\subsection{Decoding, Normalisation and Event Registration}
+\label{subsec:decoding-normalisation-registration}
+
+The decoder is the trust boundary for data received from the perf buffer. It
+first establishes that the common context and declared argument records fit
+within the delivered payload. It then resolves the event identifier through an
+explicit registry and decodes each indexed argument according to the expected
+type. Only a structurally valid and schema-compatible record becomes a
+normalised event.
+
+The event registry and the probe registry describe different aspects of the
+same logical interface. The event registry defines identifiers, names, and
+argument schemas used by decoding and configuration validation. The probe
+registry defines which physical programs produce those events and which
+support dependencies they require. Keeping these registries separate allows
+each to represent its own concern, while consistency checks are required to
+ensure that every public producer has a corresponding decoder contract.
+
+Normalisation creates the representation consumed by later components in user
+space. Policies and detectors receive typed event information rather than
+parsing terminal text or JSON. Presentation can therefore change without
+altering rule evaluation. Detectors can also preserve structured source
+evidence instead of reconstructing it from rendered output.
+
+An unknown event identifier or malformed argument record is logged and dropped.
+The runtime does not fabricate an opaque event or pass a partially decoded
+record to a policy or detector. This behaviour makes registry drift and
+contract violations visible while allowing the monitoring loop to continue
+with subsequent valid records.
+
+\subsection{Event Output, Alert Output and Operational Logging}
+\label{subsec:event-alert-logging}
+
+The runtime maintains three distinct output responsibilities. Raw event output
+presents admitted normalised telemetry. Alert output presents results derived
+from detector matches. Structured operational logging reports the state and
+failures of the monitoring infrastructure itself.
+
+Raw events and alerts may be rendered independently. A presentation mode can
+suppress raw telemetry while retaining collection, decoding, policy admission,
+detector execution, and alert generation. This is an output decision and must
+not be confused with early kernel filtering. In the combined mode, an admitted
+raw event is presented before detector evaluation and any resulting alerts.
+
+Operational diagnostics follow a separate path. They cover startup,
+attachment, transport loss, decoding errors, detector failures, output
+failures, and cleanup information. They neither serialise eBPF events nor
+replace detector alerts. This separation allows machine-oriented telemetry and
+security results to remain stable while logging verbosity or encoding changes
+for operational needs.
+
+Some failures can occur before the structured logger has been created, such as
+invalid initial configuration or unreadable rule files. Those errors are
+returned directly to the entry point. This does not change the three-way
+architectural distinction; it identifies an outer startup boundary around the
+normal runtime logging path.
+
+\section{Policy and Detection Architecture}
+\label{sec:policy-detection-architecture}
+
+Policies and detectors are separate, configuration-driven stages over the
+normalised event stream. This separation follows an established runtime
+security pattern rather than constituting novelty by itself. Its role in the
+prototype is to keep collection scope, security interpretation, and
+presentation independently configurable within a bounded host-local design.
+
+\subsection{Policy-Based Event Scope}
+\label{subsec:policy-based-event-scope}
+
+A policy determines whether a normalised event belongs to the active monitoring
+scope. The implemented selectors use event identity and selected process
+attributes. A matching suppression rule takes precedence over non-suppress
+matches; when no policy is configured, the policy layer does not restrict the
+event stream.
+
+Some policy information can influence collection before monitoring starts.
+When every active non-suppress rule supplies an explicit event allowlist, their
+combined scope can narrow the event selection used by the probe registry.
+Constraints that require decoded process information, together with
+suppression decisions, remain in the user-space path. Policy evaluation is
+therefore split between optional attach-time reduction of the event domain and
+the authoritative admission decision over decoded events. It is not executed
+as a complete kernel policy engine.
+
+Policy definitions do not instantiate detectors, select detector identifiers,
+or route detections by ATT\&CK metadata. Their mode and intent metadata also do
+not create separate detector pipelines in the current runtime. Matched policy
+names are not propagated automatically into emitted detector alerts. These
+boundaries distinguish the implemented scope model from the broader policy
+capabilities reviewed in Chapter~2.
+
+\subsection{Point and Collective Detectors}
+\label{subsec:point-collective-detectors}
+
+Detector definitions are loaded independently from policies. Their event
+references and conditions are validated before the runtime begins, and the
+dispatcher indexes them by the events they consume. This avoids evaluating
+every detector for every event and isolates a detector-local error from the
+remaining detector set.
+
+A point detector evaluates deterministic predicates over one normalised event.
+When the predicates match, it creates an alert containing that source event.
+A collective detector instead defines an ordered sequence of event conditions.
+It retains a partial match until a later admitted event advances the sequence,
+the sequence completes, or its local state is discarded. Neither model learns
+a behavioural baseline or calculates a statistical anomaly score.
+
+Detector event declarations are consumer requirements, not attachment
+instructions. They are checked against the event registry, but they do not
+automatically enlarge the collection scope. An operator must select compatible
+events through the monitoring configuration or policies. A valid detector may
+otherwise remain inactive because one of its required observations is not
+produced.
+
+Sequence order is the order in which events arrive at the user-space detector
+engine. The design does not search backwards, reorder observations, or infer a
+causal graph. This bounded model supports the short collective patterns defined
+for the prototype while avoiding a claim of general complex-event processing
+\cite{cugola2012processing,agrawal2008eventstreams}.
+
+\subsection{Bounded Local Correlation}
+\label{subsec:bounded-local-correlation}
+
+Each collective detector defines how the events in its ordered sequence must
+be related. The available local relationships distinguish a stable process, an
+immediate parent-to-child transition, the same file resource, the same local
+cgroup, or a conjunction of these dimensions. A partial match is retained only
+within a short configurable interval and a bounded number of correlation keys.
+When the sequence completes, the alert preserves the ordered events that
+satisfied it; otherwise, the incomplete state expires, is replaced for the
+same key, or is evicted.
+
+Stable process correlation distinguishes separate process lifetimes even when
+the operating system later reuses the same numeric process identifier.
+Process-tree correlation remains deliberately shallow: a sequence may stay
+within one process or move from a parent observation to its immediate child,
+but it does not traverse arbitrary ancestry or construct a persistent process
+graph.
+
+Resource correlation identifies the same local file object rather than relying
+on a pathname string. This permits related activity from different processes
+to be joined while avoiding the assumption that an equal path always denotes
+the same object. Cgroup correlation can similarly connect processes sharing a
+local kernel cgroup identity. It does not attribute events to a Kubernetes pod,
+workload, tenant, or cluster-wide identity.
+
+A composite relationship requires every configured dimension to agree; it is
+a conjunction rather than a fallback among alternative keys. User-session
+correlation is rejected because the normalised event model does not expose a
+stable session identity, and UID alone would merge unrelated activity.
+
+Only one partial sequence is retained for a detector and correlation key. A
+new first step for that key can replace the existing incomplete sequence.
+State is bounded by time and by a per-detector key limit, although total memory
+also depends on detector count, sequence length, and retained event payloads.
+Expired state is reclaimed during relevant detector activity or an explicit
+flush, not by a general periodic scheduler in the main runtime.
+
+\subsection{Alert Evidence and MITRE ATT\&CK Metadata}
+\label{subsec:alert-evidence-attack}
+
+An alert is a derived detector result rather than an operational log message.
+A point alert preserves the source event that satisfied its predicates, while
+a collective alert preserves the ordered sequence accumulated by the detector.
+This evidence makes the result traceable to the runtime observations on which
+it is based and allows machine-oriented output to retain more detail than a
+compact interactive summary.
+
+Detector definitions may associate this evidence with MITRE ATT\&CK tactics,
+techniques, data sources, and data components. The metadata is copied into the
+resulting alert, providing a shared vocabulary through which the intended
+security meaning can be communicated and organised
+\cite{strom2020attack}. The mapping is part of detector configuration rather
+than policy selection.
+
+Validation establishes that configured tactic and technique identifiers follow
+the expected syntactic form. It does not consult an authoritative ATT\&CK
+catalogue at runtime, verify the semantic correctness of the mapping, or
+demonstrate complete coverage. These limitations do not remove the value of
+the metadata: preserving the mapping alongside the evidence supports
+interpretation, traceability, and later coverage analysis. The final assessment
+of representative detector mappings belongs to Chapter~5.
+
+\section{Design Decisions and Scope Boundaries}
+\label{sec:design-decisions-boundaries}
+
+The architecture follows a series of deliberate trade-offs. Bounded
+kernel-space collection is preferred to embedding complex, verifier-sensitive
+analysis in each probe. The Go runtime owns policy and detector semantics so
+that those definitions can evolve without recompiling the kernel programs.
+Selective loading and attachment are preferred to activating every registered
+probe, and an explicit shared event contract is preferred to ad hoc payload
+interpretation.
+
+Perf buffers are used because they are supported by the reference environment
+and runtime stack; BPF ring-buffer transport remains a non-implemented
+alternative. Policy scope is kept separate from detector logic, and detector
+results are kept separate from operational logging. Collective detection uses
+short, local, evidence-preserving sequences rather than persistent graphs or a
+general-purpose event-processing system.
+
+These decisions define the limits of the prototype. It does not implement
+enforcement, prevention, machine-learning anomaly discovery, user-session
+correlation, arbitrary process ancestry, cluster-wide correlation, or
+Kubernetes workload attribution. It does not claim complete Linux event or
+MITRE ATT\&CK coverage, universal kernel portability, or universal compliance
+with the performance objective.
+
+Container packaging supports later operational use but is an implementation
+concern described in Chapter~4. A wider platform may eventually aggregate
+alerts from several monitored hosts and add deployment context, but that
+external capability is neither implemented nor evaluated as part of this
+thesis. Within its stated boundary, the proposed system provides a coherent
+path from selected kernel observations to normalised telemetry and
+evidence-preserving local detections on the identified enterprise kernel.
