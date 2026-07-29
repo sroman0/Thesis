@@ -493,7 +493,7 @@ even when the individual observations may not be unusual
 
     \includegraphics[
         width=0.90\textwidth,
-        height=0.65\textheight,
+        height=0.75\textheight,
         keepaspectratio
     ]{figures/chapter2/types_of_anomaly.jpg}
 
@@ -529,98 +529,321 @@ Kernel telemetry becomes useful for security analysis only after the collected
 observations have been placed within a defined monitoring context and evaluated
 against explicit conditions. The tool developed in this work follows this
 principle by separating the selection of relevant activity from its security
-interpretation. Policies define the monitoring scope by selecting the events and process contexts
-admitted to the analysis pipeline, while detectors operate on the resulting
-normalised stream and evaluate explicit security conditions. Keeping these
-responsibilities separate allows the monitoring scope and the detection logic
-to evolve independently, without moving higher-level analysis into the eBPF
-programs. Comparable separations between event selection and rule evaluation
-appear in established runtime security systems \cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
+interpretation. Policies define the monitoring scope by selecting the events
+and process contexts admitted to the analysis pipeline, while detectors operate
+on the resulting normalised stream and evaluate explicit security conditions.
+Keeping these responsibilities separate allows the monitoring scope and the
+detection logic to evolve independently, without moving higher-level analysis
+into the eBPF programs. Comparable separations between event selection and rule
+evaluation appear in established runtime security systems
+\cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
 falcosecurity_falco_rules}.
 
-A point detector evaluates one event and emits an alert when its predicates
-match. A collective detector additionally needs state: it must retain enough
-information to decide whether later events complete a potentially malicious pattern.
-Correlation keys constrain which observations may belong to the same sequence,
-and a time window bounds how long partial matches remain relevant. These
-choices reduce accidental correlation between observations that do not share
-the identity required by the detector, although they do not by themselves
-prove that every emitted alert is malicious
+A single-event detector evaluates one observation and emits an alert when its
+predicates match. A collective detector instead retains the evidence needed to
+determine whether later observations complete a predefined ordered pattern.
+Each collective detector defines the local relationship that must hold among
+the events involved. This allows a pattern to remain associated even when its
+events originate from different processes, provided that they share the
+identity required by the detector. A partial match is retained only for a
+bounded interval and is discarded if the sequence is not completed within that
+time. These constraints reduce accidental associations between unrelated
+observations, although a completed pattern does not by itself prove malicious
+intent
 \cite{cugola2012processing,agrawal2008eventstreams}.
 
-An alert is a higher-level result derived from one or more source events. A
-useful alert preserves enough provenance for an operator or downstream system
-to understand the rule that matched and the evidence that triggered it.
-Typical fields include detector identity, severity, source process attributes,
-the relevant event arguments, and, for collective matches, the ordered event
-sequence. This separation also permits raw telemetry and alert output to be
-selected independently according to operational needs
+An alert is a higher-level result derived from one or more source events. It
+should identify the detector that matched and preserve sufficient evidence to
+explain why its condition was satisfied. When the detection concerns a
+collective pattern, the alert also retains the ordered sequence of observations
+that completed it. Keeping alerts distinct from raw telemetry allows the two
+outputs to be retained and routed independently according to operational needs
 \cite{scarfone2007idps,falcosecurity_falco_outputs}.
 
 \subsection{MITRE ATT\&CK as a Classification Framework}
 \label{subsec:mitre-attack-classification}
 
-\gls{attack} organises observed adversary behaviour into tactics and
-techniques. Tactics express the adversary's objective, while techniques
-describe ways in which that objective may be pursued. The framework provides a
-shared vocabulary for describing behaviour across detections, reports, and
-security products \cite{strom2020attack,mitre2026attackresources}.
+The alerts described in the previous subsection preserve the observations that
+caused a detector to match. However, the meaning of those observations may
+remain closely tied to the terminology of the local rule that produced the
+alert. Relating the result to a shared security vocabulary makes it easier to
+interpret the detected behaviour and communicate it beyond the monitoring
+tool itself.
 
-Associating detector output with ATT\&CK metadata improves the interpretability
-and interoperability of alerts. It enables an analyst to relate a local rule to
-a recognised behavioural category and allows downstream systems to group or
-search alerts using stable identifiers. In the proposed work, the mapping is
-therefore treated as part of the detector contract rather than as decorative
-output. Its purpose is to make the security meaning of a match explicit and to
-support structured analysis across the detector set
+\gls{attack} provides such a vocabulary by organising observed adversary
+behaviour into tactics and techniques. Tactics represent the objectives pursued
+by an adversary, while techniques describe how those objectives may be
+achieved. This structure allows detections and security reports produced by
+different systems to refer to recognised behavioural categories
 \cite{strom2020attack,mitre2026attackresources}.
 
-The framework remains a classification system rather than an executable
-detection language. A technique can manifest through different event
-sequences, and one local observation may support several interpretations.
-Detector-to-technique mappings consequently require deliberate review against
-the behaviour represented by each rule \cite{strom2020attack,
-mitre2026attackfaq}.
+The tool developed in this work associates ATT\&CK metadata with detector
+definitions and propagates it to the resulting alerts. This connects the
+low-level runtime evidence preserved by an alert with a broader description of
+its possible security relevance. Stable ATT\&CK identifiers also allow alerts
+to be interpreted and organised consistently by analysts or downstream
+systems. The mapping is therefore treated as part of the semantic description
+of a detector rather than as an additional presentation field
+\cite{strom2020attack,mitre2026attackresources}.
+
+\gls{attack} remains a classification framework: the same technique may appear through different runtime behaviours,
+while a single observation may support more than one interpretation. A mapping
+must consequently be reviewed against the specific behaviour represented by
+the detector. Associating an alert with a technique does not by itself validate
+the detector or demonstrate complete coverage of that technique
+\cite{strom2020attack,mitre2026attackfaq}.
 
 \section{Related Runtime Security Tools}
 \label{sec:related-runtime-security-tools}
 
-Open-source runtime security tools use kernel telemetry in materially different
-architectures. Tracee presents a broad event pipeline with policy selection and
-detectors; Falco centres its design on declarative rules over event streams;
-Tetragon combines observability with hook-specific selectors and optional
-in-kernel actions. They are useful architectural references, but their event
-catalogues, threat models, and operational goals are not interchangeable
-\cite{her2025ebpfsecuritytools}.
+Existing eBPF-based runtime security tools share the objective of interpreting
+kernel-derived activity, but they place event selection, detection, and
+response at different points of the monitoring pipeline. Tracee, Falco, and
+Tetragon are considered here because they represent three relevant design
+approaches for positioning the proposed system. Tracee provides the closest
+architectural reference through its separation of event collection, policies,
+detectors, and output. Falco centres its design on declarative rules and alert
+generation, while Tetragon moves filtering and optional response closer to the
+monitored kernel hook \cite{her2025ebpfsecuritytools}.
 
 \subsection{Tracee}
 \label{subsec:tracee}
 
-Tracee is a Linux runtime security and observability system that represents
-system calls, process lifecycle activity, file operations, networking data,
-LSM-related observations, and derived security detections through a common
-event abstraction. Events are grouped into categories and can be selected
-individually or through sets \cite{aquasecurity_tracee,
-aquasecurity_tracee_events}.
+Among the systems considered in this section, Tracee is the closest reference
+for the tool developed in this work. Both systems separate kernel-level event
+collection from the analysis performed in user space. This shared structure,
+rather than a direct feature-by-feature correspondence, makes Tracee the main
+architectural reference for the proposed system. \cite{aquasecurity_tracee,aquasecurity_tracee_overview,
+her2025ebpfsecuritytools}.
 
-Tracee policies combine scope with rules that select the events and data of
-interest. Filtering is divided between kernel and user space according to the
-available event data and filter type. This architecture can avoid submitting
-some irrelevant records while retaining richer processing after events reach
-user space \cite{aquasecurity_tracee_policies}. Detection remains a separate
-layer: current detectors declare their input events, process matching
-observations, and can emit derived events. Tracee supports detector
-implementations in Go and declarative YAML definitions, and detector output can
-participate in the same event-oriented pipeline
+\subsubsection{Architecture and Event Pipeline}
+\label{subsubsec:tracee-architecture}
+
+The official architecture overview reproduced in
+Figure~\ref{fig:tracee-architecture} presents Tracee as a sequence of connected
+stages. eBPF programs attached to kernel and networking hooks generate runtime
+events, which are transferred to user space for collection and enrichment.
+The resulting observations are then evaluated by the detection layer and made
+available to external consumers. The diagram therefore illustrates an
+important architectural property of Tracee: kernel instrumentation is only the
+first stage of a broader processing pipeline
+\cite{aquasecurity_tracee_architecture}.
+
+\begin{figure}[H]
+    \centering
+    \makebox[\textwidth][c]{%
+        \includegraphics[
+            width=1.10\textwidth,
+            keepaspectratio
+        ]{figures/chapter2/tracee_architecture.png}
+    }
+
+    \caption[Tracee high-level architecture]
+    {Tracee high-level architecture \cite{aquasecurity_tracee_architecture}.}
+    \label{fig:tracee-architecture}
+\end{figure}
+
+The terminology used in the figure reflects the Tracee version for which it
+was published. In particular, the detection stage is represented through the
+signature-based model used by that release. The current development
+documentation retains the same broad separation between collection,
+interpretation, and output, but identifies detectors as the preferred mechanism
+for implementing new threat detections and derived events. The figure should
+therefore be read as a high-level architectural overview.
+\cite{aquasecurity_tracee_overview,aquasecurity_tracee_custom_events,
+aquasecurity_tracee_detectors}.
+
+This evolution does not alter the principal architectural idea illustrated by
+the diagram. Runtime observations originate from different kernel sources but
+are converted into events before higher-level processing takes place. Detection
+logic operates on this event representation rather than interacting directly
+with each underlying probe, while later components determine how the resulting
+events are enriched, selected, and delivered.
+
+\subsubsection{Unified Event Model}
+\label{subsubsec:tracee-event-model}
+
+The processing stages shown in Figure~\ref{fig:tracee-architecture} are connected
+through Tracee's event abstraction. Observations may originate from system
+calls, process lifecycle hooks, file and network activity, Linux Security
+Module instrumentation, or container-related sources, but they are presented
+to the remainder of the system through a common representation. Policies,
+detectors, and output components can consequently operate on events without
+having to manage the attachment semantics of each underlying kernel source
+\cite{aquasecurity_tracee_events,aquasecurity_tracee_overview}.
+
+The same abstraction also represents information derived after the original
+kernel observation has reached user space. Security detections and other
+derived results become events of their own and can participate in the same
+processing infrastructure. This reduces the distinction between raw telemetry
+and higher-level results at the pipeline level, while preserving their
+different semantic roles
+\cite{aquasecurity_tracee_overview,aquasecurity_tracee_detectors,
+aquasecurity_tracee_detector_api}.
+
+Events can be selected individually or through sets that group related event
+types. The event catalogue therefore acts both as the interface exposed to
+users and as the vocabulary shared by the principal user-space components
+\cite{aquasecurity_tracee_events}.
+
+\subsubsection{Policies and Event Selection}
+\label{subsubsec:tracee-policies}
+
+Tracee policies determine which part of the available event domain is relevant
+to a monitoring scenario. A policy combines a scope, which identifies the
+workloads or execution contexts to which it applies, with rules that select
+events and optionally constrain their data. The same policy model can be
+expressed through a plain YAML or JSON document or through a Kubernetes custom
+resource, allowing the monitoring intent to remain consistent across local and
+orchestrated deployments
+\cite{aquasecurity_tracee_policies}.
+
+This abstraction separates the decision to observe an event from the logic
+that interprets its security significance. Policies can restrict collection to
+the processes, containers, or event families of interest without embedding
+every selection rule inside a detector. Where the necessary information is
+available during kernel-side processing, filtering can prevent irrelevant
+records from entering the user-space pipeline. Conditions that require richer
+context can instead be completed after the event has been collected and
+normalised
+\cite{aquasecurity_tracee_policies}.
+
+In the current development model, policy rules can refer not only to ordinary
+runtime events but also to detectors through their threat metadata. A policy
+may therefore select detections according to properties such as severity or
+MITRE ATT\&CK classification without naming every detector individually. This
+selection is resolved when Tracee starts, so detectors that do not satisfy the
+configured criteria do not need to participate in runtime dispatch
+\cite{aquasecurity_tracee_policy_rules}.
+
+The policy layer consequently provides more than a final output filter. It
+defines the portion of the event and detector domain that Tracee prepares for a
+particular monitoring objective, while leaving the interpretation of matching
+observations to the detector layer.
+
+\subsubsection{Detectors and Derived Events}
+\label{subsubsec:tracee-detectors}
+
+The signature block shown in Figure~\ref{fig:tracee-architecture} represents the
+detection model used when that architecture was documented. Tracee's current
+development version introduces detectors as the preferred mechanism for new
+threat detections and derived events, while retaining the earlier signature
+system for backward compatibility
+\cite{aquasecurity_tracee_custom_events}.
+
+A detector declares the input events required by its logic and receives
+matching observations from the event pipeline. It can then evaluate those
+observations and produce a derived event when its condition is satisfied.
+Detectors may be implemented in Go when programmatic control and access to
+runtime state are required, or described through YAML when the desired
+condition can be expressed declaratively
 \cite{aquasecurity_tracee_detectors,aquasecurity_tracee_detector_api}.
 
-The system supports structured and human-readable output, stream routing, and
-enrichment for operational use. Its breadth and mature event model make it an
-important reference for separating collection, selection, detection, and
-presentation \cite{aquasecurity_tracee_output}. The proposed work follows that
-separation as a design pattern, but it is an independent and narrower research
-prototype. It does not claim Tracee's event coverage, detector ecosystem,
-forensic facilities, or functional equivalence.
+Because detector results are represented as events, they are not restricted to
+a terminal notification channel. They can be selected by policies, routed
+through the output infrastructure, or consumed by other detectors. Provenance
+information can preserve the relationship between a derived result and the
+observations from which it originated
+\cite{aquasecurity_tracee_detector_api}.
+
+The detector API permits implementations to consume several event types and
+retain internal state. This makes stateful detection possible, but it should
+not be interpreted as a predefined general-purpose temporal language. The API
+provides the mechanisms through which a detector may combine evidence, while
+the meaning and limits of that correlation remain part of the detector
+implementation.
+
+\subsubsection{Output and Operational Context}
+\label{subsubsec:tracee-output}
+
+Once events have passed through collection, selection, and detection, Tracee's
+output subsystem determines how they are presented and delivered. Output
+configuration is independent from the detector that produced an event. The
+same observation can therefore be rendered for interactive inspection or
+serialised for machine processing without changing its detection logic
+\cite{aquasecurity_tracee_output}.
+
+Tracee supports human-readable tables, structured JSON records, and custom
+templates. Events can be written to local destinations, forwarded to external
+logging infrastructure, or delivered through webhooks. Output streams provide
+an additional routing layer by allowing different portions of the event domain
+to be sent to independent destinations
+\cite{aquasecurity_tracee_output}.
+
+The event stream may also be enriched with information maintained outside the
+original kernel record. Process ancestry and container context can provide the
+operator with a clearer account of the workload responsible for an
+observation, while provenance information connects a derived detection to the
+event from which it originated. This enrichment illustrates why Tracee keeps
+event collection distinct from the later interpretation and presentation
+stages: the eBPF program captures the information available at the hook, while
+user space can relate that record to broader runtime state
+\cite{aquasecurity_tracee_detector_api,aquasecurity_tracee_output}.
+
+Tracee additionally includes forensic capabilities that extend beyond alert
+generation. Runtime events can guide the collection of artefacts for later
+investigation, giving the system a broader operational scope than a monitor
+whose output is limited to telemetry and detector alerts
+\cite{aquasecurity_tracee_overview}.
+
+\subsubsection{Portability and Security Boundaries}
+\label{subsubsec:tracee-boundaries}
+
+Tracee's breadth depends on capabilities exposed by the monitored Linux
+kernel. Its current installation guidance identifies BTF information and
+kernel-symbol availability as important prerequisites and explicitly
+recognises the enterprise Linux 4.18 kernel used by Red Hat Enterprise Linux 8
+as a supported exception to its general upstream-version guidance. Individual
+events may nevertheless depend on additional kernel configuration or
+attachment support, so the presence of the minimum kernel version does not
+imply that every Tracee capability is available
+\cite{aquasecurity_tracee_requirements}.
+
+This compatibility model is particularly relevant to the target considered in
+this thesis. It demonstrates that a long-lived enterprise kernel cannot be
+evaluated solely through its nominal upstream version. BTF availability,
+vendor backports, accessible symbols, verifier behaviour, and supported hooks
+must be examined on the deployed system.
+
+Tracee also states an explicit trust assumption: the kernel is expected to be
+trustworthy when monitoring begins. Once a kernel-level adversary controls the
+system, it may interfere with eBPF execution, suppress observations, or disable
+the monitoring infrastructure. Tracee can attempt to identify known forms of
+kernel manipulation after startup, but such detection remains best effort
+rather than a guarantee against a compromised kernel
+\cite{aquasecurity_tracee_security_model}.
+
+This boundary is important when interpreting kernel-derived telemetry. Running
+the collection programs inside the kernel protects them from ordinary
+application behaviour, but it does not make the monitoring system independent
+from the integrity of the kernel on which those programs execute.
+
+\subsubsection{Relationship to the Proposed Work}
+\label{subsubsec:tracee-relationship}
+
+Tracee influenced the proposed system primarily through its separation of
+event collection, policy-based selection, detector evaluation, and output.
+The tool developed in this work adopts the same general division of
+responsibilities: heterogeneous kernel observations are converted into a
+normalised user-space representation, policies define the monitored event
+domain, and detectors interpret selected observations without placing all
+security logic inside the eBPF programs.
+
+The relationship is architectural rather than one of functional equivalence.
+Tracee provides a broad event catalogue, extensive process and workload
+context, configurable routing, detector chaining, and forensic capabilities.
+The prototype developed in this thesis instead concentrates on a selected set
+of process and host-security events on the specified Rocky Linux kernel. Its
+detector model is deliberately bounded around deterministic conditions over
+individual events and short locally correlated sequences.
+
+Tracee therefore serves both as a design reference and as a point of comparison
+for the contribution of this work. It shows that the main architectural choices
+on which the proposed system relies are already established in runtime security
+tooling. The contribution of the thesis lies instead in bringing these ideas
+together within an independently developed prototype tailored to the selected
+enterprise environment, where its compatibility, internal event contract,
+collective detection model, and runtime behaviour can be examined directly.
 
 \subsection{Other Relevant eBPF Security Tools}
 \label{subsec:other-ebpf-security-tools}
@@ -661,53 +884,103 @@ installation requirements also illustrate the dependence of advanced eBPF
 functionality on kernel capabilities and BTF availability
 \cite{cilium_tetragon_requirements}.
 
-Together, Falco and Tetragon mark two useful boundaries for the proposed work.
-Falco shows a mature single-event rule and alert model, while Tetragon shows the
-advantages and platform requirements of in-kernel selectors and enforcement.
-The prototype considered in this thesis instead retains enforcement outside its
-scope and concentrates on local observation, normalisation, deterministic
-point rules, and short, locally correlated collective patterns.
+\subsection{Comparative Summary}
+\label{subsec:runtime-tools-comparison}
+
+The systems examined in this section represent different approaches to runtime
+security. Tracee provides the closest architectural reference because it
+separates kernel-level collection from the analysis performed in user space.
+Falco instead places declarative rule evaluation and alert generation at the
+centre of its design, while Tetragon moves a greater part of event selection
+and optional response closer to the kernel hook.
+
+These approaches are not directly interchangeable, but they provide useful
+reference points for the proposed system. Tracee illustrates the event-oriented
+pipeline that most closely influenced its architecture, whereas Falco and
+Tetragon establish the boundaries represented by an alert-centred rule engine
+and an enforcement-oriented design. The main distinctions are summarised in
+Table~\ref{tab:runtime-security-tools-comparison}.
+
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.25}
+
+    \begin{tabularx}{\textwidth}{
+        >{\raggedright\arraybackslash}p{0.14\textwidth}
+        >{\raggedright\arraybackslash}X
+        >{\raggedright\arraybackslash}X
+    }
+        \toprule
+        \textbf{Tool} &
+        \textbf{Core approach} &
+        \textbf{Role in the comparison} \\
+        \midrule
+
+        Tracee &
+        Event-oriented pipeline with separate policy, detection, and output
+        stages. &
+        Closest architectural reference for the proposed system.
+        \cite{aquasecurity_tracee_policies,
+        aquasecurity_tracee_detectors} \\
+
+        Falco &
+        Declarative rules evaluated over incoming events to generate alerts. &
+        Reference for a mature rule- and alert-centred model.
+        \cite{falcosecurity_falco_rules,
+        falcosecurity_falco_rule_conditions} \\
+
+        Tetragon &
+        Hook-centred policies with in-kernel selectors and optional actions. &
+        Reference for kernel-side filtering and runtime enforcement.
+        \cite{cilium_tetragon_tracing_policy,
+        cilium_tetragon_enforcement} \\
+
+        \bottomrule
+    \end{tabularx}
+
+    \caption{Architectural summary of the runtime security tools considered in
+    this chapter.}
+    \label{tab:runtime-security-tools-comparison}
+\end{table}
 
 \section{Positioning of the Proposed Work}
 \label{sec:positioning-proposed-work}
 
 The proposed work occupies a deliberately bounded part of the Linux runtime
-security design space. It targets process and host-security monitoring on Rocky
-Linux 8.10 and its enterprise 4.18-based kernel. Vendor backports and
-target-specific verifier behaviour make this environment more nuanced than its
-upstream version number suggests, so compatibility is treated as a property to
-be established on the target rather than inferred from nominal kernel age
+security design space. It focuses on process and host-security monitoring on
+Rocky Linux 8.10 with kernel
+\texttt{4.18.0-553.109.1.el8\_10.x86\_64}. Because this environment combines
+an older upstream kernel base with vendor backports, compatibility cannot be
+inferred from the version number alone. The available hooks, helpers, data
+layouts, and verifier behaviour must instead be established on the deployed
+system
 \cite{redhat2025backporting}.
 
-At a high level, eBPF programs collect selected kernel observations and can
-apply a minimal early filter, while a Go runtime normalises the resulting event
-stream. Declarative policies define the event domain, and automatically
-activated YAML detectors evaluate deterministic predicates over individual
-events or short ordered patterns. Collective detection is intentionally local
-and bounded, but it is not restricted to process identity. Detector-specific
-correlation strategies can associate observations through stable process
-identity, immediate parent relationships, file-resource identity, local cgroup
-identity, or composite combinations of these dimensions. This enables selected
-cross-process detections without requiring a persistent process graph or
-cluster-wide state. Alerts preserve their source evidence and carry ATT\&CK
-metadata as a common classification vocabulary.
+Within this environment, eBPF programs collect selected kernel observations
+and transfer them to a Go runtime through an explicit event contract. The
+resulting records are converted into a normalised event stream on which
+policies and detectors perform separate roles. Policies determine the monitored
+event domain, while configured YAML detectors evaluate deterministic
+conditions over individual observations or short ordered patterns. Correlation
+remains local and bounded, but it can associate activity across processes when
+the observations share the relationship defined by the detector. Alerts retain
+the evidence that produced the match and may carry ATT\&CK metadata to express
+its security meaning through a shared classification vocabulary.
 
-This combination should be understood as an integration and engineering
-contribution rather than a claim that its individual mechanisms are
-unprecedented. Kernel event collection, declarative rules, policy-based
-selection, user-space state, and ATT\&CK-labelled alerts all have established
-precedents in Tracee, Falco, Tetragon, and related systems
+The individual mechanisms used by the prototype have clear precedents in
+existing runtime security systems. Tracee provides the closest architectural
+reference through its event-oriented separation of collection, policy
+selection, detection, and output. Falco demonstrates the maturity of
+declarative event rules and alert generation, while Tetragon illustrates a
+more kernel-centred design that also supports enforcement
 \cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
-falcosecurity_falco_rules,cilium_tetragon_tracing_policy}. The thesis instead
-examines how these ideas can be assembled into a compact, independently
-implemented pipeline under the constraints of the selected enterprise kernel.
+falcosecurity_falco_rules,cilium_tetragon_tracing_policy}.
 
-Several boundaries remain explicit. The system is an observation and detection
-prototype, not an enforcement engine. Its rules are deterministic rather than
-machine-learned, its collective model covers short local sequences rather than
-general contextual or cluster-wide correlation, and its implemented event
-families represent selected coverage rather than complete host visibility.
-Performance, compatibility, detector behaviour, and the effect of filtering
-are evaluated experimentally in Chapter~5 rather than assumed from the
-architecture. Possible orchestration in a wider deployment remains future
-context and is not treated as a contribution of this thesis.
+The contribution of this thesis therefore lies in the independent integration
+of these ideas within a compact prototype tailored to the selected enterprise
+kernel. Particular attention is given to the compatibility decisions required
+by that environment, the contract through which kernel records become typed
+user-space events, and the use of bounded local state for collective detection.
+These aspects can be examined directly because both the collection and
+analysis pipeline were developed as part of the work.
