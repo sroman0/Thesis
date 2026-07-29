@@ -328,44 +328,107 @@ deployment kernel
 \subsection{Maps, Helpers and Kernel-to-Userspace Transport}
 \label{subsec:ebpf-maps-helpers-transport}
 
-Maps are typed kernel objects through which eBPF programs store state or
-exchange data with user space. Different map types provide different access
-semantics, including key-value lookup, per-CPU storage, arrays, queues, and
-event-oriented communication. Their key and value sizes, capacity, flags, and
-lifetime are configured when the map is created. Maps make it possible to keep
-configuration or short-lived state outside the limited BPF stack, but every map
-operation remains subject to verifier checks and map-specific concurrency
-semantics \cite{linux_bpf_maps,linux_bpf_syscall}.
+The execution of an eBPF program is intentionally constrained and usually
+short-lived. Runtime monitoring, however, requires information to persist
+beyond a single invocation and eventually reach user space, where more complex
+processing can be performed. Linux supports this interaction through
+kernel-managed state and a controlled communication path between eBPF programs
+and the user-space runtime. Maps, helpers, and event buffers form the main
+building blocks of this path
+\cite{linux_bpf_maps,linux_bpf_helpers,linux_perf_ring_buffer,
+linux_bpf_ringbuf}.
 
-Helpers are kernel functions exposed to eBPF programs through a controlled
-interface. They provide operations such as obtaining process identity, reading
-kernel or user memory through approved paths, accessing maps, retrieving time,
-and submitting event data. Helper availability depends on the program type and
-kernel version. Consequently, a helper documented for eBPF in general cannot be
-assumed to be callable by every program or present on every target
-\cite{linux_bpf_helpers,linux2026ebpfverifier}.
+Maps are typed kernel objects that allow eBPF programs to preserve state across
+invocations and exchange data with user space. Each map type defines its own
+access and concurrency semantics, while its structure and capacity are
+established at creation time. By moving persistent configuration and temporary
+state outside the constrained BPF stack, maps extend the information that a
+program can retain between executions. Accesses performed by eBPF code remain
+subject to verifier validation and to the rules imposed by the selected map
+type \cite{linux_bpf_maps,linux_bpf_syscall}.
 
-Event transport bridges the execution of short kernel programs and the more
-complex processing performed in user space. A perf-event array can direct
-records to per-CPU perf ring buffers, from which a consumer reads samples and
-lost-event notifications. The BPF ring buffer is a separate map design with a
-shared multi-producer, single-consumer buffer; among its motivations are more
-efficient shared capacity and the preservation of reservation order across
-CPUs. Neither mechanism provides unbounded storage. If producers outpace the
-consumer or available capacity, records can be lost, so buffer sizing,
-consumer throughput, and loss accounting form part of a monitor's correctness
-and performance evaluation \cite{linux_perf_ring_buffer,linux_bpf_ringbuf}.
+Helpers are kernel-provided functions that extend what an eBPF program can do
+without granting unrestricted access to kernel internals. They expose selected
+services through a controlled interface, allowing the kernel to validate how
+those services are invoked and what data is passed to them. The set of
+available helpers is determined by the program type and by the capabilities of
+the target kernel, so support documented for eBPF in general does not imply
+that the same helper can be used in every execution context. This constraint is
+particularly relevant to this work, which targets Rocky Linux 8.10 with kernel
+\texttt{4.18.0-553.109.1.el8\_10.x86\_64}: helper selection must therefore be
+validated against the capabilities of the deployed kernel and the program type
+used by each probe, rather than inferred solely from current upstream
+documentation \cite{linux_bpf_helpers,linux2026ebpfverifier}.
 
-Transport choice also affects the event protocol. Kernel and user space must
-agree on record framing, field widths, byte order, optional data, and event
-identifiers. A successful buffer read proves only that bytes were transported;
-it does not prove that they were interpreted as the event that produced them.
-Stable identifiers and explicit decoding rules are therefore as important as
-the selected buffer technology
-\cite{gbadamosi2024ebpf,linux_perf_ring_buffer}.
+Event transport carries records produced during eBPF execution to user space,
+where they can be decoded and processed without extending the work performed
+inside the kernel. The BPF ring buffer provides a shared
+multi-producer, single-consumer channel designed to use buffer capacity across
+CPUs and preserve the order in which records are reserved. Perf-event
+transport follows a different model: a
+\texttt{BPF\_MAP\_TYPE\_PERF\_EVENT\_ARRAY} directs records to per-CPU perf
+ring buffers, which are consumed independently and can report lost events.
+
+Both mechanisms rely on finite buffer capacity. When kernel-side producers
+generate data faster than user space can consume it, a submission may fail or
+a record may be lost. Event transport must therefore be treated as part of the
+monitor's correctness model rather than as a transparent delivery channel
+\cite{linux_bpf_ringbuf,linux_perf_ring_buffer,linux_bpf_helpers}.
+
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.15}
+
+    \label{tab:ebpf-event-transport}
+
+    \begin{tabularx}{\textwidth}{
+        @{}
+        >{\raggedright\arraybackslash}p{0.25\textwidth}
+        >{\raggedright\arraybackslash}p{0.29\textwidth}
+        >{\raggedright\arraybackslash}X
+        @{}
+    }
+        \toprule
+        \textbf{Mechanism} &
+        \textbf{Buffer organisation} &
+        \textbf{Main implication} \\
+        \midrule
+
+        BPF ring buffer &
+        Shared multi-producer, single-consumer buffer &
+        Shares capacity across CPUs and preserves reservation order between
+        producers. \\
+
+        Perf-event transport &
+        Per-CPU buffers referenced through a perf-event array &
+        Buffers are consumed independently and provide explicit lost-event
+        notifications. \\
+
+        \bottomrule
+    \end{tabularx}
+
+    \caption[Comparison of eBPF event-transport mechanisms]
+    {Comparison of eBPF event-transport mechanisms
+    \cite{linux_bpf_ringbuf,linux_perf_ring_buffer}.}
+
+\end{table}
+
+Regardless of the selected transport mechanism, kernel and user space must
+share a consistent record format so that the transferred data can be decoded
+into correctly typed events
+\cite{gbadamosi2024ebpf}.
 
 \subsection{BTF and CO-RE Portability}
 \label{subsec:ebpf-btf-core}
+
+An eBPF program often interacts with kernel data structures whose layout may
+change across kernel versions and distribution builds. A program compiled
+against one specific set of kernel headers may therefore rely on field offsets
+or type definitions that do not match the target system. Portability requires
+a way to preserve the meaning of those accesses while adapting them to the
+types exposed by the deployed kernel. BTF and CO-RE provide the metadata and
+relocation mechanisms used to address this problem.
 
 \gls{btf} represents types and related metadata in a compact format understood
 by the kernel and BPF tooling. BTF may describe C types and strings and can also
@@ -374,37 +437,45 @@ loaders and debugging tools can reason about kernel data structures without
 depending solely on a set of headers copied from one kernel build
 \cite{linux_btf}.
 
-\gls{core} uses this type information to reduce coupling between a compiled
-eBPF object and the layout of kernel data structures on the target system. The
-compiler records relocation information for relevant field and type accesses;
-at load time, \texttt{libbpf} compares those expectations with target BTF and
-adjusts compatible accesses. This approach allows one object to tolerate
-structural differences such as a field moving to another offset
+\gls{core} uses BTF information to adapt an eBPF program to the kernel on
+which it is loaded. During compilation, Clang stores relocation records that
+describe the kernel types and fields accessed by the program. At load time,
+\texttt{libbpf} reads the BTF information of the running kernel and updates the
+relevant eBPF instructions so that they use the actual layout of those
+structures. As a result, the same compiled object can continue to work when
+compatible kernel versions place a field at a different offset, without
+requiring the program to be recompiled on the monitored system
 \cite{linux_btf,linux_bpf_llvm_relocations,linux_libbpf_overview}.
 
-CO-RE does not create functionality that the target kernel lacks. It cannot
-provide an absent tracepoint, helper, program type, symbol, or security
-permission, and it does not guarantee verifier acceptance. It addresses
-structural portability, while behavioural and feature compatibility still
-require explicit checks. This distinction is especially important for
-enterprise distributions, which may retain an older upstream version number
-while backporting selected fixes and capabilities. The effective feature set
-must be established from the target kernel and distribution, not from the
-version string alone \cite{linux_bpf_design_qa,redhat2025backporting}.
+In this thesis, this mechanism helps the eBPF programs access kernel structures
+according to the layout exposed by Rocky Linux 8.10 with kernel
+\texttt{4.18.0-553.109.1.el8\_10.x86\_64}. However, CO-RE only adapts
+compatible differences in type and data-structure layout. It cannot make a
+missing hook, helper, program type, or attachment mechanism available, and it
+does not ensure that the target verifier will accept the program. These
+capabilities must therefore be checked directly on the deployed kernel. This
+is especially important for enterprise distributions, where backported
+features may make the effective kernel capabilities differ from those suggested
+by the upstream version number alone
+\cite{linux_bpf_design_qa,redhat2025backporting}.
 
 \section{Runtime Security and Anomaly Detection}
 \label{sec:runtime-security-anomaly-detection}
 
-Runtime security monitoring converts operating-system activity into evidence
-that can support detection and investigation. An \gls{idps} may use
-signature-based techniques, anomaly-based techniques, or combinations of both.
-Signature-based detection compares observations with known patterns, whereas
-classical anomaly detection identifies deviations from a model of expected
-behaviour \cite{scarfone2007idps,chandola2009anomaly}. The detector layer
-considered in this thesis is deterministic and rule-based: it does not learn a
-baseline or assign statistical anomaly scores. The anomaly terminology below
-describes the shape of the observations that make a rule relevant, not the
-learning method used to discover them.
+Kernel telemetry becomes useful for runtime security only when observed
+operations are interpreted in relation to a security condition. Detection
+systems can assign this meaning in different ways. Signature-based detection
+matches observed activity against predefined patterns, whereas anomaly-based
+detection identifies deviations from an expected model of behaviour
+\cite{scarfone2007idps,chandola2009anomaly}.
+
+The detector layer developed in this thesis follows a deterministic,
+rule-based approach. It evaluates explicit conditions over individual events
+or short ordered event sequences and does not learn a behavioural baseline or
+calculate statistical anomaly scores. The point and collective
+taxonomy introduced below is therefore used to describe the structure of the
+observations involved in a detection, rather than the algorithm through which
+the system discovers anomalous behaviour.
 
 \subsection{Point, Contextual and Collective Anomalies}
 \label{subsec:point-contextual-collective-anomalies}
@@ -417,6 +488,21 @@ anomaly is a related group of observations whose joint behaviour is anomalous,
 even when the individual observations may not be unusual
 \cite{chandola2009anomaly}.
 
+\begin{figure}[H]
+    \centering
+
+    \includegraphics[
+        width=0.90\textwidth,
+        height=0.65\textheight,
+        keepaspectratio
+    ]{figures/chapter2/types_of_anomaly.jpg}
+
+    \caption[Anomaly Detection: Type of Anomalies]
+    {Anomaly Detection, Type of Anomalies.\cite{einar2021anomalypredictions}}
+
+    \label{fig:ebpf-execution-workflow}
+\end{figure}
+
 This taxonomy is useful for kernel telemetry. A single operation can be
 security-relevant when its own attributes satisfy a sufficiently precise rule.
 Other behaviours are better represented as an ordered group, for example a
@@ -425,33 +511,36 @@ resource. Event-stream research formalises related ideas through ordered
 patterns, selection strategies, and bounded temporal constraints
 \cite{cugola2012processing,agrawal2008eventstreams}.
 
-Contextual detection requires a trustworthy and sufficiently broad model of
-the environment in which an event occurs. A node-local monitor can reliably use
-local process identity and immediate event attributes, but it may not possess
-cluster-wide workload history, organisational policy, or cross-node activity.
-For that reason, the proposed work focuses on deterministic point detections
-and short, locally correlated collective patterns. It does not claim
-contextual anomaly detection or a general-purpose complex-event-processing
-engine.
+Contextual detection depends on understanding the circumstances in which an
+event occurs. A monitor running on a single host can interpret an observation
+using the process information available at that moment, but its view remains
+limited to the local system. It cannot reliably determine whether the same
+behaviour is unusual across a wider deployment or inconsistent with
+organisational expectations that are not visible to the agent. For this
+reason, the tool developed in this work focuses on deterministic detections
+over individual events and short, locally correlated sequences. It does not
+attempt to provide contextual anomaly detection or general-purpose complex
+event processing.
 
 \subsection{Policies, Detectors and Alert Generation}
 \label{subsec:policies-detectors-alerts}
 
-Collection scope and detection logic answer different questions. A policy
-defines which portion of the available event domain is relevant to a monitoring
-scenario. It can select event families or constrain the processes whose
-activity should proceed through the pipeline. A detector consumes normalised
-events and evaluates a security condition. Keeping these responsibilities
-separate allows the monitored event set to change without rewriting every
-detection rule, and allows detector logic to evolve without placing all
-analysis inside kernel programs. Similar separations between capture,
-selection, and analysis appear in established runtime security systems
-\cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
+Kernel telemetry becomes useful for security analysis only after the collected
+observations have been placed within a defined monitoring context and evaluated
+against explicit conditions. The tool developed in this work follows this
+principle by separating the selection of relevant activity from its security
+interpretation. Policies define the monitoring scope by selecting the events and process contexts
+admitted to the analysis pipeline, while detectors operate on the resulting
+normalised stream and evaluate explicit security conditions. Keeping these
+responsibilities separate allows the monitoring scope and the detection logic
+to evolve independently, without moving higher-level analysis into the eBPF
+programs. Comparable separations between event selection and rule evaluation
+appear in established runtime security systems \cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
 falcosecurity_falco_rules}.
 
 A point detector evaluates one event and emits an alert when its predicates
 match. A collective detector additionally needs state: it must retain enough
-information to decide whether later events complete an ordered pattern.
+information to decide whether later events complete a potentially malicious pattern.
 Correlation keys constrain which observations may belong to the same sequence,
 and a time window bounds how long partial matches remain relevant. These
 choices reduce accidental correlation between unrelated processes, although
