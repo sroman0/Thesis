@@ -160,22 +160,41 @@ available at that boundary, such as a return value or an error code.
 \subsection{Process Lifecycle and Executable Transitions}
 \label{subsec:implementation-process-execution-hooks}
 
-Process creation is observed from two complementary positions. The public
-\texttt{fork} and \texttt{vfork} events are submitted by syscall-exit programs
-and contain the returned child identifier or negative error; their registered
-entry programs do not contribute data. \texttt{clone} uses the paired map to
-retain its sharing, namespace and thread-pointer arguments before adding the
-same returned result. By contrast, the raw \texttt{sched\_process\_fork}
-tracepoint observes an existing child task and records parent and child host
-identifiers together with the child's start time. It is therefore evidence of
-a successful task transition, not another spelling of the syscall result.
-Task rename and exit tracepoints submit committed command-name and lifecycle
-changes directly.
+The process hooks serve two related objectives: reconstructing the lifecycle of
+a task and identifying changes to the executable image running inside it. The
+implementation observes these operations at multiple kernel stages because no
+single hook exposes both the original request and its final effect.
 
-Executable replacement is deliberately represented at several stages that are
-not equivalent. Table~\ref{tab:implementation-process-exec-stages} assigns each public
-logical event to its physical producer pattern and records the evidence that
-can be claimed from that point.
+\subsubsection{Process Creation and Lifecycle}
+
+The \texttt{fork} and \texttt{vfork} events report the result returned by their
+respective syscalls. A positive value identifies the newly created child,
+whereas a negative value records the failure reported to the caller. Their
+entry programs are retained in the probe registry for structural consistency
+but do not need to save arguments because these syscalls have no request fields
+used by the event schema.
+
+The \texttt{clone} event provides a more detailed view of process or thread
+creation. Its entry probe retains the clone flags, stack address, parent and
+child thread-ID pointers and thread-local-storage value. The exit probe joins
+those fields with the returned child identifier or error. This event therefore
+shows both the requested sharing model and the syscall outcome, but it does not
+by itself prove that the new task reached a runnable state.
+
+The \texttt{sched\_process\_fork} tracepoint observes the later scheduler
+transition after a child task exists. It records the host process and thread
+identifiers of both parent and child, together with the child's start time.
+This event is used as effect-level evidence of task creation and complements,
+rather than duplicates, the syscall events. The remaining lifecycle
+tracepoints are direct producers: \texttt{task\_rename} records the old and new
+command names, while \texttt{sched\_process\_exit} records the exit code and
+whether the thread-group is dead.
+
+\subsubsection{Executable Transitions}
+
+Executable replacement is monitored from the initial syscall request to either
+a successful image transition or a reported failure. Table~\ref{tab:implementation-process-exec-stages}
+summarises the objective and evidence of each logical event in this path.
 
 \begin{table}[H]
     \centering
@@ -186,38 +205,46 @@ can be claimed from that point.
         >{\raggedright\arraybackslash}p{0.29\textwidth}
         >{\raggedright\arraybackslash}X@{}}
         \toprule
-        \textbf{Logical event} & \textbf{Physical attachment} &
-        \textbf{Stage and evidence} \\
+        \textbf{Logical event} & \textbf{Objective} &
+        \textbf{Captured evidence and boundary} \\
         \midrule
-        \path{execve}, \path{execveat} &
-        Dedicated syscall-entry tracepoints &
-        Execution attempt with caller pathname and at most 38 bounded argument
-        strings; \texttt{execveat} also retains directory FD and flags. \\
-        \path{security_bprm_check},
-        \path{security_bprm_creds_for_exec} &
-        Kprobes on the corresponding security functions &
-        Binary mediation and credential preparation over a resolved
-        \texttt{linux\_binprm}; repeated interpreter passes are possible and no
-        final hook result is present. \\
-        \path{sched_process_exec} &
-        Raw scheduler tracepoint &
-        Successful image replacement with the resolved executable filename. \\
-        \path{process_execute_failed} &
-        Execve/execveat entry and exit tracepoints &
-        One logical event emitted only for a negative syscall return, preserving
-        the operation variant, request path, flags and error. \\
+        \texttt{execve}, \texttt{execveat} &
+        Preserve the execution request before the current image changes &
+        Caller pathname and at most 38 argument strings. \texttt{execveat}
+        additionally records the directory file descriptor and flags. No
+        syscall result is available at this stage. \\
+        \texttt{security\_bprm\_}\newline
+        \texttt{check},\newline
+        \texttt{security\_bprm\_}\newline
+        \texttt{creds\_for\_exec} &
+        Observe binary security mediation and credential preparation &
+        Resolved path, device, inode, original filename and argument/environment
+        counts from \texttt{linux\_binprm}; the credential hook also records
+        change time. Interpreter processing may trigger repeated observations,
+        and neither event contains the hook decision. \\
+        \texttt{sched\_process\_}\newline
+        \texttt{exec} &
+        Confirm that executable replacement occurred &
+        Resolved executable filename from the scheduler transition. It does not
+        repeat the caller's complete argument vector. \\
+        \texttt{process\_execute\_}\newline
+        \texttt{failed} &
+        Report unsuccessful executable replacement &
+        Execution variant, directory file descriptor, request pathname, flags
+        and negative return value. Successful returns clear temporary state
+        without producing this event. \\
         \bottomrule
     \end{tabularx}
     \caption{Implementation stages represented by executable-transition events.}
     \label{tab:implementation-process-exec-stages}
 \end{table}
 
-The two binary-security events expose resolved file identity through path,
-device and inode evidence, whereas the entry events preserve user-provided
-execution arguments. Neither source substitutes for the scheduler transition
-when success matters. The failed-execution event is assembled by four physical
-programs but remains one decoder schema; successful returns clear its temporary
-state without submitting that logical event.
+The request events are useful for retaining information that may disappear
+after a successful replacement, especially the argument vector. The binary
+security events add resolved kernel-object identity, while the scheduler event
+supplies the success evidence. The failed event is
+assembled by four physical entry/exit programs for \texttt{execve} and
+\texttt{execveat}, but all four producers converge on one logical schema.
 
 \subsection{Identity, Credentials, Process Control and Limits}
 \label{subsec:implementation-identity-control-hooks}
@@ -225,58 +252,81 @@ state without submitting that logical event.
 
 \subsubsection{Identity and Credentials}
 \label{subsubsec:implementation-identity-credentials}
-The set-user and set-group syscall families reuse rarity-based entry/return
-helpers: one, two or three requested identifiers are retained, then the exit
-program appends the syscall result. The result must remain syscall-specific.
-In particular, \texttt{setfsuid} and \texttt{setfsgid} return the previous
-filesystem identity, not the conventional zero-on-success status.
+The identity hooks are intended to show both requested privilege changes and
+the credential state eventually installed by the kernel. The set-user and
+set-group syscall families use arity-based entry helpers: depending on the
+syscall, one, two or three requested identifiers are retained and combined with
+the exit value. This covers \texttt{setuid}/\texttt{setgid}, the real/effective
+variants, the real/effective/saved variants and the filesystem-ID variants.
+The return field must be interpreted according to the originating syscall;
+\texttt{setfsuid} and \texttt{setfsgid}, for example, return the previous
+filesystem identity rather than a conventional zero-on-success status.
 
-The \texttt{security\_task\_fix\_setuid} kprobe instead serialises old and
-proposed real, effective, saved and filesystem UIDs together with the set-ID
-operation flag. It is a mediation record and has no symmetric
-\path{security_task_fix_setgid} event in the implementation. The
-\texttt{commit\_creds} kprobe provides the effect-level view: it compares the
-current and replacement credential snapshots and suppresses exact no-op
-changes. Its fixed payload includes user and group identities, secure bits and
-capability sets, with a compatibility branch for the capability representation
-used by the target kernel. The entry-only \texttt{cap\_capable} event records
-the capability number being checked but not the function decision.
+The \texttt{security\_task\_fix\_setuid} hook observes the credential proposal
+while it is being checked. It records the old and proposed real, effective,
+saved and filesystem UIDs, together with the set-ID operation flag, and omits
+records in which none of those values changes. Because the hook runs before
+credential installation and its return value is not captured, the event is
+mediation evidence rather than confirmation of a successful UID transition.
+There is no public \texttt{security\_task\_fix\_setgid} event in the current
+implementation.
+
+The \texttt{commit\_creds} hook supplies the committed-state view. Its objective
+is to detect any effective credential replacement, including changes caused by
+set-user-ID executables or kernel paths that are not represented by a set-ID
+syscall. It compares old and new compact credential snapshots and submits only
+when they differ. Each snapshot contains user and group identifiers, the user
+namespace, secure bits and inheritable, permitted, effective, bounding and
+ambient capability sets.
+
+Finally, \texttt{cap\_capable} records the capability number presented to a
+kernel capability check. This is useful for identifying privilege-sensitive
+activity, but the current payload does not retain the target credentials, user
+namespace, option flags or final decision.
 
 \subsubsection{Process Control and Limits}
 \label{subsubsec:implementation-process-control-limits}
-Paired \texttt{ptrace} programs retain the request, target and opaque address
-arguments until the syscall result is available. The security-function
-kprobes for task signalling and \texttt{prctl} instead describe mediation
-attempts: \path{security_task_kill} includes signal zero permission probes,
-and neither event carries a final outcome. \texttt{do\_sigaction} similarly
-captures the requested signal action, bounded mask information and handler
-category at function entry; it does not confirm that the action was installed.
+The \texttt{ptrace} event monitors attempts to inspect or modify another
+process. Its entry probe retains the request code, target PID and the opaque
+address and data pointers; its exit probe adds the syscall return value. The
+event can therefore distinguish a failed request from one accepted by the
+kernel, although it does not copy the memory referenced by those pointers.
 
-Resource-limit events expose two different boundaries. The
-\path{security_task_setrlimit} kprobe dereferences the proposed kernel
-limits and records their soft and hard values without an outcome. The paired
-\texttt{prlimit64} event includes the returned status but retains only the
-user-space addresses of the new and old limit structures. Wall-clock changes
-are represented by the entry-only \texttt{security\_settime64} mediation event.
+The \texttt{security\_task\_kill} event describes a signal-delivery relation. It
+records the target host PID and TID, target UID and command name, and the signal
+number requested by the source process. Signal zero is retained because it is
+commonly used as a permission or existence probe. Since the hook is observed
+during security mediation, the event does not confirm that the signal was
+delivered.
+
+The \texttt{security\_task\_prctl} event records the requested process-control
+option and its four machine-word arguments. It provides a generic view of
+security-sensitive \texttt{prctl} operations without interpreting every option
+inside eBPF. The \texttt{do\_sigaction} event has a narrower objective: it
+records the signal number, whether a new action was supplied and whether the
+caller requested the previous action. It also captures flags, the first mask
+word and handler category or address for the proposed and currently installed
+actions. It is an entry observation and does not prove that the new action was
+installed.
+
+Resource-limit monitoring is split between mediation and syscall outcome. The
+\texttt{security\_task\_setrlimit} hook records the target process, resource
+identifier and proposed soft and hard limits after the kernel structures are
+available, but without a result. The paired \texttt{prlimit64} event records the
+target PID, resource, user-space addresses of the new and old limit structures,
+and the returned status; it deliberately does not dereference those structures.
+The \texttt{security\_settime64} hook completes this control family by recording
+the proposed seconds, nanoseconds and timezone fields of a wall-clock change at
+the mediation stage.
 
 \subsection{File and Filesystem Security}
 \label{subsec:implementation-filesystem-hooks}
 
-File monitoring combines syscall-facing paths with resolved kernel objects.
-The four physical open/openat entry and exit programs converge on the public
-\texttt{open} event, whose operation field preserves the variant and whose
-result is a file descriptor or negative error. Its pathname is the caller's
-request. The \texttt{security\_file\_open} kprobe runs later with a
-\texttt{struct file}; it reconstructs a bounded path and adds flags, device,
-inode and change time, but does not report the security function's return.
-Where recoverable, the original syscall pathname is retained separately rather
-than being treated as identical to the resolved path.
-
-The same division is used across the rest of the family, summarised in
-Table~\ref{tab:implementation-filesystem-families}. Kernel path reconstruction
-uses per-CPU scratch storage, stops after 20 components and may preserve a
-partial or disconnected representation; it is not a universal canonical-path
-resolver.
+The filesystem hooks are intended to preserve both the path requested by a
+process and the kernel object reached after path resolution. These are separate
+forms of evidence: the request explains the caller's intent, while the resolved
+object supplies stable device and inode identity. Table~\ref{tab:implementation-filesystem-families}
+summarises how the implementation combines them.
 
 \begin{table}[H]
     \centering
@@ -287,47 +337,66 @@ resolver.
         >{\raggedright\arraybackslash}p{0.27\textwidth}
         >{\raggedright\arraybackslash}X@{}}
         \toprule
-        \textbf{Logical event group} & \textbf{Producer pattern} &
-        \textbf{Evidence and boundary} \\
+        \textbf{Logical event group} & \textbf{Monitoring objective} &
+        \textbf{Captured evidence and boundary} \\
         \midrule
-        \path{open}, \path{chmod}, \path{chown} &
-        Syscall entry/exit families &
-        Variant-aware requests completed with returned file descriptor/status
-        or errno; path-, FD- and dirfd-relative variants share one schema per
-        family. \\
-        \path{security_file_open},
-        \path{security_file_permission},
-        \path{security_file_ioctl} &
-        Kprobes on file security functions &
-        Resolved file identity plus flags, permission mask or opaque ioctl
-        command/data; entry mediation only. \\
-        Inode unlink, rename, symlink and mknod events &
-        Kprobes on \texttt{security\_inode\_*} functions &
-        Resolved dentry/inode evidence for the attempted object operation;
-        symlink target remains caller supplied and no completion result is
-        emitted. \\
-        \path{security_sb_mount}, \path{security_sb_umount} &
-        Kprobes on superblock security functions &
-        Resolved mount target or mountpoint, filesystem type and flags at the
-        mediation point, without confirmed mount or unmount completion. \\
+        \texttt{open}, \texttt{chmod}, \texttt{chown} &
+        Record requested access or metadata modification and its syscall result &
+        Operation variant, path/file-descriptor context and operation-specific
+        arguments, followed by a returned file descriptor, status or error.
+        Related syscall spellings converge on one schema per family. \\
+        \texttt{security\_file\_}\newline
+        \texttt{open} &
+        Identify the resolved object being opened &
+        Resolved pathname, flags, device, inode and change time, plus the
+        best-effort caller pathname when recoverable. No final decision is
+        captured. \\
+        \texttt{security\_file\_}\newline
+        \texttt{permission}, \texttt{ioctl} &
+        Observe permission checks and device-specific control requests &
+        Resolved file identity with the requested permission mask, or ioctl
+        command and opaque argument pointer. Both are mediation records. \\
+        \texttt{security\_inode\_}\newline
+        \texttt{unlink}, \texttt{rename} &
+        Observe removal and movement of directory entries &
+        Resolved source-object identity and, for rename, the old and new paths
+        and operation flags. The events describe attempted mediated operations,
+        not completion. \\
+        \texttt{security\_inode\_}\newline
+        \texttt{symlink}, \texttt{mknod} &
+        Observe creation of symbolic links and special filesystem nodes &
+        Resolved new-entry path with caller-supplied symlink target, or mode and
+        device number for a node. No syscall result is present. \\
+        \texttt{security\_sb\_}\newline
+        \texttt{mount}, \texttt{umount} &
+        Observe mount-topology modification requests &
+        Resolved target or mountpoint, source/filesystem information and flags
+        available at the security boundary, without confirmed completion. \\
         \bottomrule
     \end{tabularx}
     \caption{Shared construction and evidence boundaries in file-system events.}
     \label{tab:implementation-filesystem-families}
 \end{table}
 
-The chmod and chown groups make the physical/logical distinction especially
-visible: six chmod and eight chown tracepoint programs produce only two public
-logical event types. Conversely, the resolved security events remain distinct
-because they expose different kernel operations and schemas rather than
-syscall spelling alone.
+The \texttt{open} event preserves the caller pathname and reports a file
+descriptor or negative error. By contrast, \texttt{security\_file\_open} runs
+with a resolved \texttt{struct file} and can add device, inode and change time;
+its separately retained syscall pathname is never treated as equivalent to the
+resolved path. Path reconstruction uses per-CPU scratch storage, stops after 20
+components and may return a partial or disconnected representation.
+
+The chmod and chown families also illustrate the logical/physical separation:
+six chmod and eight chown entry/exit programs produce only two public event
+types. The operation field identifies the syscall variant, while the shared
+schema retains the fields relevant to path-, file-descriptor- or
+directory-relative forms.
 
 \subsection{Memory, Namespace and Cgroup Transitions}
 \label{subsec:implementation-memory-namespace-hooks}
 
-These families reuse the shared direct and paired patterns but differ in the
-objects available at their hooks. Table~\ref{tab:implementation-memory-namespace}
-keeps the comparison at the implementation boundary.
+These hooks monitor changes to address spaces and isolation boundaries. Syscall
+events preserve the process request and return value, whereas security and
+committed-state hooks expose the kernel objects affected by the operation.
 
 \begin{table}[H]
     \centering
@@ -338,77 +407,119 @@ keeps the comparison at the implementation boundary.
         >{\raggedright\arraybackslash}p{0.25\textwidth}
         >{\raggedright\arraybackslash}X@{}}
         \toprule
-        \textbf{Logical event group} & \textbf{Physical attachment} &
-        \textbf{Stage and retained evidence} \\
+        \textbf{Logical event group} & \textbf{Monitoring objective} &
+        \textbf{Captured evidence and boundary} \\
         \midrule
-        \path{memfd_create}, \path{mmap}, \path{mprotect},
-        \path{pkey_mprotect} &
-        Dedicated syscall entry/exit tracepoints &
-        Request parameters joined with file descriptor, mapped address,
-        completion status or errno according to the syscall. \\
-        \path{process_vm_readv}, \path{process_vm_writev} &
-        Dedicated syscall entry/exit tracepoints &
-        Target and vector metadata plus transferred-byte count or errno; iovec
-        elements and memory payloads are not copied. \\
-        \path{security_mmap_file},
-        \path{security_file_mprotect} &
-        Kprobes on memory security functions &
-        Resolved file or VMA evidence and requested protections at mediation;
-        anonymous file mapping is skipped by the former and no final decision is
-        present. \\
-        \path{setns}, \path{unshare} &
-        Syscall entry/exit tracepoints &
-        Namespace-change request joined with the returned status. \\
-        \path{switch_task_ns} &
-        Kprobe on \path{switch_task_namespaces} &
-        Committed namespace replacement; only identifiers that changed are
-        appended, and unchanged transitions are suppressed. \\
-        Cgroup attach, mkdir and rmdir events &
-        Raw cgroup tracepoints &
-        Local task attachment and hierarchy lifecycle evidence with kernel
-        cgroup identifiers and bounded paths. \\
+        \texttt{memfd\_create} &
+        Detect creation of anonymous executable-capable file objects &
+        Requested name and flags, followed by the returned file descriptor or
+        error. \\
+        \texttt{mmap}, \texttt{mprotect},
+        \texttt{pkey\_mprotect} &
+        Record requested address-space creation or permission changes &
+        Address, length, protections and operation-specific fields, joined with
+        the mapped address, status or error returned by the syscall. \\
+        \texttt{process\_vm\_}\newline
+        \texttt{readv}, \texttt{writev} &
+        Observe cross-process memory transfer requests &
+        Target PID, local/remote vector addresses and counts, flags and returned
+        byte count or error. Vector elements and memory contents are not copied. \\
+        \texttt{security\_mmap\_}\newline
+        \texttt{file},\newline
+        \texttt{security\_file\_}\newline
+        \texttt{mprotect} &
+        Observe memory operations at security mediation &
+        Resolved file or VMA identity and requested protections. Anonymous
+        mapping is skipped by the former, and neither event contains a final
+        decision. \\
+        \texttt{setns}, \texttt{unshare} &
+        Record namespace-change requests and their syscall outcomes &
+        Namespace file descriptor/type or unshare flags, followed by returned
+        status or error. \\
+        \texttt{switch\_task\_ns} &
+        Confirm installation of a replacement namespace set &
+        Target PID and only the mount, PID, UTS, IPC, network or cgroup namespace
+        identifiers that changed. Unchanged transitions are suppressed. \\
+        \texttt{cgroup\_attach\_}\newline
+        \texttt{task} &
+        Observe movement of a task into a cgroup &
+        Cgroup/hierarchy identity and path, target command and host identifiers,
+        and whether the operation concerns a thread group. \\
+        \texttt{cgroup\_mkdir}, \texttt{cgroup\_rmdir} &
+        Observe local cgroup hierarchy lifecycle &
+        Cgroup identifier, bounded path and hierarchy identifier at creation or
+        removal. \\
         \bottomrule
     \end{tabularx}
     \caption{Implementation stages for memory, namespace and cgroup events.}
     \label{tab:implementation-memory-namespace}
 \end{table}
 
-The memory-security hooks receive resolved kernel objects directly and do not
-use the bounded red-black-tree VMA search helper present elsewhere in the
-source. Namespace-switch arguments are sparse because only changed identifiers
-are encoded. Cgroup identifiers describe local kernel objects and are not
-interpreted as Kubernetes workload identities or as a persistent relationship
-graph.
+The memory-security hooks receive their resolved kernel objects directly; they
+do not rely on the optional red-black-tree VMA lookup helper retained elsewhere
+in the source. Namespace fields are sparse because the indexed argument format
+allows \texttt{switch\_task\_ns} to omit unchanged identifiers. Cgroup IDs and
+paths remain local kernel observations and are not interpreted as Kubernetes
+workload identities or as a persistent process/cgroup graph.
 
 \subsection{Kernel Integrity and Kernel-Facing Activity}
 \label{subsec:implementation-kernel-activity-hooks}
 
-Module tracepoints submit load and removal lifecycle identities directly,
-whereas a kprobe/kretprobe pair around \texttt{do\_init\_module} associates the
-module object with the function result. The eBPF-facing security kprobes retain
-only the command and attribute size, map identity, or program identity and
-type. They deliberately avoid parsing command-dependent \texttt{union
-bpf\_attr} contents and, as entry observations, do not report the eventual
-security-hook or syscall result.
+These hooks target operations that may change kernel behaviour or expose
+kernel-facing execution interfaces. They provide evidence for later detectors;
+none of them classifies an operation as malicious on its own.
 
-Dynamic instrumentation uses paired producers when the outcome is part of the
-evidence. Kprobe registration joins symbol and handler addresses with the
-registration result; symbol lookup joins the requested name with the returned
-address. These events cover calls through the selected functions rather than
-all possible kernel-address discovery or instrumentation paths.
+\subsubsection{Modules and eBPF Objects}
 
-Kernel-facing interfaces complete this family. Procfs creation and user-mode
-helper invocation are direct request observations; the latter bounds both
-argument and environment arrays. The pre- and post-kernel-read security events
-are separate mediation stages with resolved file identity. The post-read event
-adds the supplied size, but neither event retains file contents or a digest and
-no map automatically pairs them.
+The \texttt{module\_load} and \texttt{module\_free} tracepoints record module
+lifecycle identities, including the module name and available version fields.
+Their purpose is to make additions and removals visible. The paired
+\texttt{do\_init\_module} event observes a different boundary: it retains the
+module object at entry and combines its identity with the function result at
+return, thereby distinguishing successful and failed initialisation.
 
-This coverage observes selected module, eBPF, instrumentation and kernel-file
-surfaces. It does not enumerate hidden modules, inspect handler code, construct
-an eBPF attachment graph, prove kernel integrity or enforce a decision. With
-the producer mechanisms established, the next section explains how public
-logical selection activates their physical programs and dependencies.
+The \texttt{security\_bpf}, \texttt{security\_bpf\_map} and
+\texttt{security\_bpf\_prog} hooks monitor security mediation for eBPF
+operations. They record, respectively, the BPF command and attribute size, map
+identity, or program identity and type. The implementation deliberately avoids
+parsing command-dependent \texttt{union bpf\_attr} contents. These entry events
+therefore identify the object under inspection but do not report whether the
+operation was ultimately allowed or attached to a hook.
+
+\subsubsection{Dynamic Instrumentation and Kernel Interfaces}
+
+The \texttt{register\_kprobe} event monitors registration of dynamic kprobes.
+Its entry side retains the symbol name and pre/post-handler addresses, and its
+return side adds the registration result. The
+\texttt{kallsyms\_lookup\_}\allowbreak\texttt{name} event similarly
+joins the requested kernel symbol name with the address returned by the lookup
+function. These events cover the selected registration and lookup functions;
+they do not enumerate every way in which kernel addresses or instrumentation
+can be obtained.
+
+The \texttt{proc\_create} event records creation of a procfs entry through its
+name and the address of the associated proc operations.
+
+The \texttt{call\_usermodehelper} event observes a kernel request to launch a
+user-space helper. It records the helper path, bounded argument and environment
+arrays, and the requested wait mode. Because the event describes the request,
+it does not confirm that the helper process was started or completed
+successfully.
+
+The \texttt{security\_kernel\_read\_file} event observes the security stage
+before the kernel consumes a file. It preserves the resolved file identity and
+the identifier describing the purpose of the read.
+
+The \texttt{security\_kernel\_post\_read\_file} event observes the later
+post-read stage and additionally records the supplied file size. Neither event
+copies file contents or computes a digest, and the implementation does not
+automatically correlate the two stages into one logical operation.
+
+The implementation therefore observes selected module, eBPF, instrumentation
+and kernel-file surfaces. It does not enumerate hidden modules, inspect handler
+code, construct an eBPF attachment graph, prove kernel integrity or enforce a
+decision. The next section explains how logical event selection activates
+these producers and their support dependencies.
 
 \section{Loader, Probe Registry and Attachment Lifecycle}
 \label{sec:implementation-loader-registry}
