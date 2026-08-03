@@ -12,14 +12,15 @@ reserved for Chapter~5.
 \section{Build Toolchain and Project Organisation}
 \label{sec:implementation-build-organisation}
 
-The build produces three dependent artefacts. First, the checked-out libbpf
-source is compiled as a local static archive together with its headers and
-package metadata. Second, Clang compiles the eBPF translation unit and its
-shared headers into an object with x86-64 target definitions. Finally, the Go command is
-built through CGO against the local libbpf archive and the local libbpfgo
-bindings. The aggregate build target preserves this order so that neither the
-eBPF compiler nor the Go linker can silently use a different system copy of
-the kernel-facing library.
+The build produces three dependent artefacts. 
+
+First, the checked-out libbpf source is compiled as a local static archive 
+together with its headers and package metadata. Second, Clang compiles the 
+eBPF translation unit and its shared headers into an object with x86-64 target 
+definitions. Finally, the Go command is built through CGO against the local 
+libbpf archive and the local libbpfgo bindings. The aggregate build target 
+preserves this order so that neither the eBPF compiler nor the Go linker 
+can silently use a different system copy of the kernel-facing library.
 
 The generated eBPF object is an input to the Go build. A Go embedding directive
 places the object in the executable, so the object must exist before the Go
@@ -111,6 +112,8 @@ identifier. Listing~\ref{lst:ebpf-entry-state} shows the source key, replacement
 update and return-side lookup; fixed slot copies and deletion are deliberately
 left to the surrounding contract.
 
+\newpage
+
 \begin{lstlisting}[
     language=C,
     caption={Per-thread entry state used by paired producers (abridged).},
@@ -145,12 +148,14 @@ before the result is appended. Replacement with \texttt{BPF\_ANY} prevents
 stale state from blocking a later entry, but it also means that this map is a
 short construction aid rather than a history of process activity.
 
-The remaining subsections reuse these direct and paired forms. Their principal
-difference is the stage made visible: an attempt records supplied intent, a
-mediation point exposes an operation under security inspection, a committed
-transition reports installed state, a successful lifecycle hook confirms that
-its transition occurred, and a returned result records the outcome visible at
-the observed function or syscall boundary.
+The following subsections apply these direct and paired construction patterns
+to different hook families. The meaning of an event, however, depends on the
+stage at which it is observed. A syscall-entry event records an operation
+requested by a process, while a security mediation hook reports that the
+kernel is evaluating that operation. A committed-state hook observes a change
+after it has been installed, and a lifecycle tracepoint confirms that a kernel
+transition has occurred. Finally, an exit or return hook provides the result
+available at that boundary, such as a return value or an error code.
 
 \subsection{Process Lifecycle and Executable Transitions}
 \label{subsec:implementation-process-execution-hooks}
@@ -217,8 +222,10 @@ state without submitting that logical event.
 \subsection{Identity, Credentials, Process Control and Limits}
 \label{subsec:implementation-identity-control-hooks}
 
-\noindent\textbf{Identity and credentials.}
-The set-user and set-group syscall families reuse arity-based entry/return
+
+\subsubsection{Identity and Credentials}
+\label{subsubsec:implementation-identity-credentials}
+The set-user and set-group syscall families reuse rarity-based entry/return
 helpers: one, two or three requested identifiers are retained, then the exit
 program appends the syscall result. The result must remain syscall-specific.
 In particular, \texttt{setfsuid} and \texttt{setfsgid} return the previous
@@ -235,11 +242,12 @@ capability sets, with a compatibility branch for the capability representation
 used by the target kernel. The entry-only \texttt{cap\_capable} event records
 the capability number being checked but not the function decision.
 
-\noindent\textbf{Process control and limits.}
+\subsubsection{Process Control and Limits}
+\label{subsubsec:implementation-process-control-limits}
 Paired \texttt{ptrace} programs retain the request, target and opaque address
 arguments until the syscall result is available. The security-function
 kprobes for task signalling and \texttt{prctl} instead describe mediation
-attempts: \texttt{security\_task\_kill} includes signal zero permission probes,
+attempts: \path{security_task_kill} includes signal zero permission probes,
 and neither event carries a final outcome. \texttt{do\_sigaction} similarly
 captures the requested signal action, bounded mask information and handler
 category at function entry; it does not confirm that the action was installed.
