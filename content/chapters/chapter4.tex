@@ -43,63 +43,81 @@ occurs through the event and detector contracts described below.
 \section{eBPF Program Implementation}
 \label{sec:implementation-ebpf-programs}
 
-The eBPF programs use one event-construction framework across heterogeneous
-hooks. A common context stores the timestamp, event and syscall identifiers,
-CPU and stack identifiers, effective UID, command and UTS names, cgroup and
-namespace identifiers, and process identities in namespace and host views.
-Event-specific values are appended to an indexed argument buffer. Scalar
-arguments are encoded at fixed width, whereas strings, byte sequences and
-arrays carry a bounded length before their payload.
+The object contains programs attached to several physical hook types, but their
+records are built through two recurring forms. A direct producer constructs and
+submits an event in one invocation. A paired producer retains request data at
+entry and completes the same logical event when a return hook exposes the
+result. These forms are independent of the public logical-event name: several
+physical programs can converge on one schema, and an attached support program
+need not expose a public event. Section~\ref{sec:implementation-loader-registry}
+describes how that mapping becomes an attachment plan.
 
-Large event structures are not allocated on the eBPF stack. A single-entry
-per-CPU array holds the current event workspace, and a second per-CPU map
-provides reusable scratch areas for paths and intermediate structures. Bounded
-LRU maps retain process and task information across invocations. This
-arrangement gives each CPU an independent construction area while keeping the
-large 32,000-byte argument buffer outside the verifier-constrained stack.
+\subsection{Shared Event-Construction Framework}
+\label{subsec:implementation-shared-event-construction}
 
-Common initialisation obtains the per-CPU workspace and global configuration
-before event-specific collection begins. Listing~\ref{lst:ebpf-early-admission}
-shows the exact admission guard and its position in this shared path.
+Both construction forms use a single-entry per-CPU event workspace rather than
+placing the large record on the eBPF stack. Additional per-CPU scratch maps
+support path and intermediate-object handling, while bounded task and process
+maps retain reusable context. The common initialiser resets the indexed
+argument buffer and establishes only the identity and timing data required
+during collection. Event-specific programs then append their evidence, and the
+submission helper refreshes the complete task context immediately before the
+record crosses the boundary described in
+Section~\ref{sec:implementation-binary-contract}.
+
+Listing~\ref{lst:ebpf-shared-construction} combines the relevant boundaries of
+the two source helpers. Intermediate process-map setup and optional stack
+capture are omitted because they do not alter the construction contract.
 
 \begin{lstlisting}[
     language=C,
-    caption={Early UID admission in common eBPF initialisation (abridged).},
-    label={lst:ebpf-early-admission}
+    caption={Common event initialisation and submission boundaries (abridged from two helpers).},
+    label={lst:ebpf-shared-construction}
 ]
-statfunc bool should_drop_by_kernel_uid_filter(config_entry_t *config)
-{
-    if (config == NULL)
-        return false;
-    if (config->kernel_uid_filter_enabled == 0)
-        return false;
-    u32 current_uid = (u32) bpf_get_current_uid_gid();
-    return current_uid != config->kernel_uid_filter;
+if (p->event == NULL) {
+    p->event = bpf_map_lookup_elem(&event_data_map, &zero);
+    if (unlikely(p->event == NULL))
+        return 0;
 }
-// Inside init_program_data, before enrichment:
 p->config = bpf_map_lookup_elem(&config_map, &zero);
 if (unlikely(p->config == NULL))
     return 0;
-if (should_drop_by_kernel_uid_filter(p->config))
-    return 0;
+// ... UID admission and task/process map setup are omitted.
+reset_event_args_buf(p->event);
+p->event->task = (struct task_struct *) bpf_get_current_task();
+u64 id = bpf_get_current_pid_tgid();
+p->event->context.task.host_tid = id;
+p->event->context.task.host_pid = id >> 32;
+p->event->context.eventid = event_id;
+init_task_context(&p->event->context.task, p->event->task, p->config->options);
+u32 size = sizeof(event_context_t) + sizeof(u8) + p->event->args_buf.offset;
+long perf_ret = bpf_perf_event_output(p->ctx, &events, BPF_F_CURRENT_CPU, p->event, size);
+update_event_stats(p->event->context.eventid, perf_ret);
+return perf_ret;
 \end{lstlisting}
 
-Placing the comparison in common initialisation makes the configured UID rule
-common to every hook using this framework. An admitted hook then records its
-event-specific values; full task-context enrichment remains deferred to the
-submission helper. A mismatch therefore returns before enrichment and perf
-transport without turning the guard into a general kernel policy language.
+The per-CPU workspace is reused rather than queued as mutable state; ownership
+ends when the helper copies the populated prefix into the perf-event channel.
+Failure to obtain the workspace, configuration, task state or process state
+causes that invocation to return without a record. The actual implementation
+also clamps the submitted size in verifier-visible form and updates optional
+delivery counters. The abbreviated final call therefore shows the transport
+boundary, while Section~\ref{sec:implementation-binary-contract} owns its exact
+bounds and failure semantics.
 
-The paired construction model requires state to survive between two hook
-invocations. Listing~\ref{lst:ebpf-entry-state} shows how the logical event ID
-and current thread ID form the map key used by both sides.
+Paired producers require a different kind of ownership. Entry arguments are
+stored in a hash map under the logical event identifier and current host thread
+identifier. Listing~\ref{lst:ebpf-entry-state} shows the source key, replacement
+update and return-side lookup; fixed slot copies and deletion are deliberately
+left to the surrounding contract.
 
 \begin{lstlisting}[
     language=C,
-    caption={Per-thread state retained between entry and return hooks (abridged).},
+    caption={Per-thread entry state used by paired producers (abridged).},
     label={lst:ebpf-entry-state}
 ]
-statfunc u64 get_args_id(u32 event_id) {
+statfunc u64 get_args_id(u32 event_id)
+{
     return ((u64) event_id << 32) | (u32) bpf_get_current_pid_tgid();
 }
 statfunc int save_args(args_t *args, u32 event_id)
@@ -113,120 +131,276 @@ statfunc int load_args(args_t *args, u32 event_id)
     u64 args_id = get_args_id(event_id);
     args_t *saved_args = bpf_map_lookup_elem(&args_map, &args_id);
     if (!saved_args)
-        return -1;
-    // Seven fixed argument-slot copies are omitted.
+        return -1; // missed entry or not a container
+    // ... seven fixed argument-slot copies are omitted.
     return 0;
 }
 \end{lstlisting}
 
-The event component prevents two paired logical operations on the same thread
-from sharing one slot. Entry updates use replacement semantics so stale state
-does not block a later observation. On return, the fixed seven-slot copy keeps
-the verifier-visible access pattern bounded; the exit path removes the map
-entry after retrieval and appends the operation result before submission.
+Including the event identifier prevents different paired operations on one
+thread from sharing a slot. The seven machine-word fields in \texttt{args\_t}
+are copied explicitly so that every access remains statically bounded. A
+missing entry suppresses the return-side event; a successful lookup is deleted
+before the result is appended. Replacement with \texttt{BPF\_ANY} prevents
+stale state from blocking a later entry, but it also means that this map is a
+short construction aid rather than a history of process activity.
 
-\subsection{Process Lifecycle and Execution Hooks}
-\label{subsec:implementation-process-hooks}
+The remaining subsections reuse these direct and paired forms. Their principal
+difference is the stage made visible: an attempt records supplied intent, a
+mediation point exposes an operation under security inspection, a committed
+transition reports installed state, a successful lifecycle hook confirms that
+its transition occurred, and a returned result records the outcome visible at
+the observed function or syscall boundary.
 
-Process execution is represented at several complementary stages. The
-\texttt{execve} and \texttt{execveat} entry programs capture the attempted
-pathname and a bounded argument vector while the user-space pointers are still
-available. The latter also retains its directory file descriptor and flags.
-Later security-related probes expose the resolved executable and credential
-preparation state, while the scheduler execution tracepoint records the
-successful replacement of the process image. A separate entry/exit pair emits
-an execution-failure event only when the syscall result is negative.
+\subsection{Process Lifecycle and Executable Transitions}
+\label{subsec:implementation-process-execution-hooks}
 
-Scheduler fork and exit observations need no temporary return-side state
-because the tracepoint itself represents the transition of interest. Task
-renaming follows the same direct-submission pattern. The distinct semantics of
-the execution stages are defined in
-Section~\ref{subsec:hook-selection-logical-events}.
+Process creation is observed from two complementary positions. The public
+\texttt{fork} and \texttt{vfork} events are submitted by syscall-exit programs
+and contain the returned child identifier or negative error; their registered
+entry programs do not contribute data. \texttt{clone} uses the paired map to
+retain its sharing, namespace and thread-pointer arguments before adding the
+same returned result. By contrast, the raw \texttt{sched\_process\_fork}
+tracepoint observes an existing child task and records parent and child host
+identifiers together with the child's start time. It is therefore evidence of
+a successful task transition, not another spelling of the syscall result.
+Task rename and exit tracepoints submit committed command-name and lifecycle
+changes directly.
 
-Argument-vector capture is bounded in both element count and total buffer
-space. The serialiser accepts at most 38 strings and writes a truncation marker
-when further entries cannot be represented. This retains useful command
-evidence while keeping loop exploration and event size predictable for the
-target verifier.
+Executable replacement is deliberately represented at several stages that are
+not equivalent. Table~\ref{tab:implementation-process-exec-stages} assigns each public
+logical event to its physical producer pattern and records the evidence that
+can be claimed from that point.
 
-\subsection{Credentials and Privilege Hooks}
-\label{subsec:implementation-credential-hooks}
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.16}
+    \begin{tabularx}{\textwidth}{
+        @{}>{\raggedright\arraybackslash}p{0.23\textwidth}
+        >{\raggedright\arraybackslash}p{0.29\textwidth}
+        >{\raggedright\arraybackslash}X@{}}
+        \toprule
+        \textbf{Logical event} & \textbf{Physical attachment} &
+        \textbf{Stage and evidence} \\
+        \midrule
+        \path{execve}, \path{execveat} &
+        Dedicated syscall-entry tracepoints &
+        Execution attempt with caller pathname and at most 38 bounded argument
+        strings; \texttt{execveat} also retains directory FD and flags. \\
+        \path{security_bprm_check},
+        \path{security_bprm_creds_for_exec} &
+        Kprobes on the corresponding security functions &
+        Binary mediation and credential preparation over a resolved
+        \texttt{linux\_binprm}; repeated interpreter passes are possible and no
+        final hook result is present. \\
+        \path{sched_process_exec} &
+        Raw scheduler tracepoint &
+        Successful image replacement with the resolved executable filename. \\
+        \path{process_execute_failed} &
+        Execve/execveat entry and exit tracepoints &
+        One logical event emitted only for a negative syscall return, preserving
+        the operation variant, request path, flags and error. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Implementation stages represented by executable-transition events.}
+    \label{tab:implementation-process-exec-stages}
+\end{table}
 
-Credential monitoring combines mediation observations, committed state and
-syscall outcomes. The set-UID security hook compares the old and proposed
-credentials and serialises the real, effective, saved and filesystem user
-identifiers together with the kernel operation flag. Requests that do not
-change a relevant value are suppressed. Since this probe runs at function
-entry, the event describes a proposed transition rather than the final syscall
-result.
+The two binary-security events expose resolved file identity through path,
+device and inode evidence, whereas the entry events preserve user-provided
+execution arguments. Neither source substitutes for the scheduler transition
+when success matters. The failed-execution event is assembled by four physical
+programs but remains one decoder schema; successful returns clear its temporary
+state without submitting that logical event.
 
-The credential-commit probe provides a second view. It compares the active
-credential object with its replacement and emits only when the user, group or
-capability state changes. The payload uses a compact fixed representation for
-the identifier and capability sets, insulating the user-space decoder from the
-different in-kernel capability layouts handled by the CO-RE reads.
+\subsection{Identity, Credentials, Process Control and Limits}
+\label{subsec:implementation-identity-control-hooks}
 
-Dedicated entry/exit pairs cover the set-user and set-group syscall families.
-Their entry programs retain the identifiers requested by the caller, and their
-exit programs append the returned status. Together, the three views distinguish
-what was requested, what was considered by the security path, and what state
-was committed. Capability checks and selected process-control operations use
-the same common context but submit directly when their security-relevant input
-is already available at one hook.
+\noindent\textbf{Identity and credentials.}
+The set-user and set-group syscall families reuse arity-based entry/return
+helpers: one, two or three requested identifiers are retained, then the exit
+program appends the syscall result. The result must remain syscall-specific.
+In particular, \texttt{setfsuid} and \texttt{setfsgid} return the previous
+filesystem identity, not the conventional zero-on-success status.
 
-\subsection{Filesystem, Memory and Namespace Hooks}
-\label{subsec:implementation-filesystem-memory-namespace-hooks}
+The \texttt{security\_task\_fix\_setuid} kprobe instead serialises old and
+proposed real, effective, saved and filesystem UIDs together with the set-ID
+operation flag. It is a mediation record and has no symmetric
+\path{security_task_fix_setgid} event in the implementation. The
+\texttt{commit\_creds} kprobe provides the effect-level view: it compares the
+current and replacement credential snapshots and suppresses exact no-op
+changes. Its fixed payload includes user and group identities, secure bits and
+capability sets, with a compatibility branch for the capability representation
+used by the target kernel. The entry-only \texttt{cap\_capable} event records
+the capability number being checked but not the function decision.
 
-The file-open security probe demonstrates enrichment based on a resolved kernel
-object. It reconstructs the file path in a per-CPU buffer and emits the open
-flags, device, inode and change time. Where the active syscall context is
-available, the original pathname is also retained. The two paths can differ,
-for example after symbolic-link or mount resolution, and are therefore stored
-as separate arguments. Path reconstruction follows mount transitions and
-disconnected dentries but stops after 20 components.
+\noindent\textbf{Process control and limits.}
+Paired \texttt{ptrace} programs retain the request, target and opaque address
+arguments until the syscall result is available. The security-function
+kprobes for task signalling and \texttt{prctl} instead describe mediation
+attempts: \texttt{security\_task\_kill} includes signal zero permission probes,
+and neither event carries a final outcome. \texttt{do\_sigaction} similarly
+captures the requested signal action, bounded mask information and handler
+category at function entry; it does not confirm that the action was installed.
 
-The logical \texttt{open} event uses a different pattern. Entry tracepoints for
-\texttt{open} and \texttt{openat} store the request, while their exit
-tracepoints complete the record with the returned file descriptor or error.
-Several physical probes thus produce the same event schema, with an operation
-argument preserving the originating syscall variant. The chmod and chown
-families reuse this model for their path-based and descriptor-based variants.
+Resource-limit events expose two different boundaries. The
+\path{security_task_setrlimit} kprobe dereferences the proposed kernel
+limits and records their soft and hard values without an outcome. The paired
+\texttt{prlimit64} event includes the returned status but retains only the
+user-space addresses of the new and old limit structures. Wall-clock changes
+are represented by the entry-only \texttt{security\_settime64} mediation event.
 
-Memory-related syscall events are also completed at exit so that the requested
-address, length and protection flags remain associated with the returned
-status. Dedicated typed tracepoints are used for these operations on the
-target kernel. Process-to-process memory events retain vector metadata but do
-not copy the transferred memory payload, which bounds both event size and the
-amount of sensitive data transported by the monitor.
+\subsection{File and Filesystem Security}
+\label{subsec:implementation-filesystem-hooks}
 
-Namespace monitoring separates requested operations from observed state
-changes. Paired \texttt{setns} and \texttt{unshare} programs include the
-syscall result. A namespace-switch probe instead compares old and new namespace
-identifiers and suppresses assignments that do not produce a relevant change.
-Cgroup task and directory activity is represented through similarly focused
-events rather than by constructing a persistent workload graph in kernel
-space.
+File monitoring combines syscall-facing paths with resolved kernel objects.
+The four physical open/openat entry and exit programs converge on the public
+\texttt{open} event, whose operation field preserves the variant and whose
+result is a file descriptor or negative error. Its pathname is the caller's
+request. The \texttt{security\_file\_open} kprobe runs later with a
+\texttt{struct file}; it reconstructs a bounded path and adds flags, device,
+inode and change time, but does not report the security function's return.
+Where recoverable, the original syscall pathname is retained separately rather
+than being treated as identical to the resolved path.
 
-\subsection{Kernel Integrity and eBPF Activity Hooks}
-\label{subsec:implementation-kernel-integrity-hooks}
+The same division is used across the rest of the family, summarised in
+Table~\ref{tab:implementation-filesystem-families}. Kernel path reconstruction
+uses per-CPU scratch storage, stops after 20 components and may preserve a
+partial or disconnected representation; it is not a universal canonical-path
+resolver.
 
-The kernel-integrity family combines compact entry observations with paired
-programs where the outcome changes the event meaning. Security hooks for BPF
-commands, maps and programs emit the command or object identity and selected
-type information. They avoid copying the complete syscall attribute union,
-whose interpretation depends on the command and would substantially enlarge
-the kernel-side parser.
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.16}
+    \begin{tabularx}{\textwidth}{
+        @{}>{\raggedright\arraybackslash}p{0.24\textwidth}
+        >{\raggedright\arraybackslash}p{0.27\textwidth}
+        >{\raggedright\arraybackslash}X@{}}
+        \toprule
+        \textbf{Logical event group} & \textbf{Producer pattern} &
+        \textbf{Evidence and boundary} \\
+        \midrule
+        \path{open}, \path{chmod}, \path{chown} &
+        Syscall entry/exit families &
+        Variant-aware requests completed with returned file descriptor/status
+        or errno; path-, FD- and dirfd-relative variants share one schema per
+        family. \\
+        \path{security_file_open},
+        \path{security_file_permission},
+        \path{security_file_ioctl} &
+        Kprobes on file security functions &
+        Resolved file identity plus flags, permission mask or opaque ioctl
+        command/data; entry mediation only. \\
+        Inode unlink, rename, symlink and mknod events &
+        Kprobes on \texttt{security\_inode\_*} functions &
+        Resolved dentry/inode evidence for the attempted object operation;
+        symlink target remains caller supplied and no completion result is
+        emitted. \\
+        \path{security_sb_mount}, \path{security_sb_umount} &
+        Kprobes on superblock security functions &
+        Resolved mount target or mountpoint, filesystem type and flags at the
+        mediation point, without confirmed mount or unmount completion. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Shared construction and evidence boundaries in file-system events.}
+    \label{tab:implementation-filesystem-families}
+\end{table}
 
-Module tracepoints report module load and removal identities. An additional
-entry/return pair for module initialisation associates the module information
-with its final status. The same temporary-state mechanism joins a requested
-kernel symbol with the address returned by symbol lookup, and joins kprobe
-registration data with the registration result. Procfs creation and user-mode
-helper invocation are high-signal entry observations whose relevant request
-data are already available at one point.
+The chmod and chown groups make the physical/logical distinction especially
+visible: six chmod and eight chown tracepoint programs produce only two public
+logical event types. Conversely, the resolved security events remain distinct
+because they expose different kernel operations and schemas rather than
+syscall spelling alone.
 
-These hooks remain observational: they neither reconstruct hidden module lists
-nor establish kernel integrity or deny the operations they report.
+\subsection{Memory, Namespace and Cgroup Transitions}
+\label{subsec:implementation-memory-namespace-hooks}
+
+These families reuse the shared direct and paired patterns but differ in the
+objects available at their hooks. Table~\ref{tab:implementation-memory-namespace}
+keeps the comparison at the implementation boundary.
+
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.16}
+    \begin{tabularx}{\textwidth}{
+        @{}>{\raggedright\arraybackslash}p{0.25\textwidth}
+        >{\raggedright\arraybackslash}p{0.25\textwidth}
+        >{\raggedright\arraybackslash}X@{}}
+        \toprule
+        \textbf{Logical event group} & \textbf{Physical attachment} &
+        \textbf{Stage and retained evidence} \\
+        \midrule
+        \path{memfd_create}, \path{mmap}, \path{mprotect},
+        \path{pkey_mprotect} &
+        Dedicated syscall entry/exit tracepoints &
+        Request parameters joined with file descriptor, mapped address,
+        completion status or errno according to the syscall. \\
+        \path{process_vm_readv}, \path{process_vm_writev} &
+        Dedicated syscall entry/exit tracepoints &
+        Target and vector metadata plus transferred-byte count or errno; iovec
+        elements and memory payloads are not copied. \\
+        \path{security_mmap_file},
+        \path{security_file_mprotect} &
+        Kprobes on memory security functions &
+        Resolved file or VMA evidence and requested protections at mediation;
+        anonymous file mapping is skipped by the former and no final decision is
+        present. \\
+        \path{setns}, \path{unshare} &
+        Syscall entry/exit tracepoints &
+        Namespace-change request joined with the returned status. \\
+        \path{switch_task_ns} &
+        Kprobe on \path{switch_task_namespaces} &
+        Committed namespace replacement; only identifiers that changed are
+        appended, and unchanged transitions are suppressed. \\
+        Cgroup attach, mkdir and rmdir events &
+        Raw cgroup tracepoints &
+        Local task attachment and hierarchy lifecycle evidence with kernel
+        cgroup identifiers and bounded paths. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Implementation stages for memory, namespace and cgroup events.}
+    \label{tab:implementation-memory-namespace}
+\end{table}
+
+The memory-security hooks receive resolved kernel objects directly and do not
+use the bounded red-black-tree VMA search helper present elsewhere in the
+source. Namespace-switch arguments are sparse because only changed identifiers
+are encoded. Cgroup identifiers describe local kernel objects and are not
+interpreted as Kubernetes workload identities or as a persistent relationship
+graph.
+
+\subsection{Kernel Integrity and Kernel-Facing Activity}
+\label{subsec:implementation-kernel-activity-hooks}
+
+Module tracepoints submit load and removal lifecycle identities directly,
+whereas a kprobe/kretprobe pair around \texttt{do\_init\_module} associates the
+module object with the function result. The eBPF-facing security kprobes retain
+only the command and attribute size, map identity, or program identity and
+type. They deliberately avoid parsing command-dependent \texttt{union
+bpf\_attr} contents and, as entry observations, do not report the eventual
+security-hook or syscall result.
+
+Dynamic instrumentation uses paired producers when the outcome is part of the
+evidence. Kprobe registration joins symbol and handler addresses with the
+registration result; symbol lookup joins the requested name with the returned
+address. These events cover calls through the selected functions rather than
+all possible kernel-address discovery or instrumentation paths.
+
+Kernel-facing interfaces complete this family. Procfs creation and user-mode
+helper invocation are direct request observations; the latter bounds both
+argument and environment arrays. The pre- and post-kernel-read security events
+are separate mediation stages with resolved file identity. The post-read event
+adds the supplied size, but neither event retains file contents or a digest and
+no map automatically pairs them.
+
+This coverage observes selected module, eBPF, instrumentation and kernel-file
+surfaces. It does not enumerate hidden modules, inspect handler code, construct
+an eBPF attachment graph, prove kernel integrity or enforce a decision. With
+the producer mechanisms established, the next section explains how public
+logical selection activates their physical programs and dependencies.
 
 \section{Loader, Probe Registry and Attachment Lifecycle}
 \label{sec:implementation-loader-registry}
@@ -327,16 +501,20 @@ buf->args[offset] = index;
 u32 buffer_arg_offset = buffer_index_offset + size;
 if (buffer_arg_offset > ARGS_BUF_SIZE)
     return 0;
-if (bpf_probe_read(&buf->args[buffer_index_offset], size, ptr) < 0)
+if (bpf_probe_read(&(buf->args[buffer_index_offset]), size, ptr) < 0)
     return 0;
 buf->offset = buffer_arg_offset;
+buf->argnum++;
+return 1;
 \end{lstlisting}
 
 The 32,000-byte capacity is not a power of two, so masking an offset with the
 capacity minus one would fold valid positions onto earlier bytes. The helper
 instead checks the original value and communicates its upper bound through
 \texttt{update\_min}. The final offset is committed only after the complete
-write succeeds, preserving the indexed stream consumed by the Go decoder.
+write succeeds, preserving the indexed stream consumed by the Go decoder. The
+correction of this non-power-of-two bounds error is recorded by commit
+\texttt{163ad724a65ec8c701dc816fe87f174eeec51275}.
 
 At submission, the common helper enriches the task context, optionally records
 a user-space stack identifier, computes the fixed and variable portions of the
@@ -360,6 +538,51 @@ values are reordered according to that schema and returned as the typed event
 consumed directly by policies and detectors. The output adapter introduced in
 Section~\ref{sec:implementation-output-logging} is a presentation model, not a
 second security-event normalisation stage.
+
+The indexed wire format allows a producer to omit unavailable evidence without
+renumbering later fields. The decoder therefore accumulates records by their
+encoded index and reconstructs the public argument order only after all
+available payloads have been interpreted. Listing~\ref{lst:decoder-indexed-arguments}
+shows this schema-directed core. The unknown-event diagnostic and final
+schema-order reconstruction are omitted.
+
+\begin{lstlisting}[
+    caption={Schema-directed reconstruction of indexed arguments (abridged).},
+    label={lst:decoder-indexed-arguments}
+]
+spec, ok := events.GetSpec(eventID)
+if !ok {
+    return decodeUnknownArguments(rawArgs, eventID, argnum)
+}
+decoded := make(map[int]Argument, argnum)
+offset := 0
+for seen := 0; seen < argnum && offset < len(rawArgs); seen++ {
+    index := int(rawArgs[offset])
+    offset++
+    if index >= len(spec.Args) {
+        return nil, fmt.Errorf("argument index %d out of range for event %s", index, spec.Name)
+    }
+    argSpec := spec.Args[index]
+    value, consumed, err := decodeArgRecord(rawArgs[offset:], argSpec.DecodeAs)
+    if err != nil {
+        return nil, fmt.Errorf("decode arg %d (%s) [event %d %s]: %w",
+            index, argSpec.Name, eventID, spec.Name, err)
+    }
+    offset += consumed
+    decoded[index] = Argument{
+        Name:  argSpec.Name,
+        Type:  argSpec.DecodeAs,
+        Value: value,
+    }
+}
+\end{lstlisting}
+
+The temporary map belongs to one decode call. A later duplicate index replaces
+the earlier value, after which the function emits only present entries in
+schema order. The wire carries no independent type tag, so the selected schema
+is both the decoding instruction and the type contract; malformed payloads are
+contained as errors at this boundary rather than forwarded as partially typed
+events.
 
 The decoder rejects a truncated fixed context, unknown event identifiers,
 argument indexes outside the selected schema, truncated scalar or variable
@@ -400,6 +623,33 @@ enrichment and submission on a mismatch. This is a single equality filter. It
 does not implement ranges, exclusion sets, namespace-aware identities or a
 general kernel policy language.
 
+Listing~\ref{lst:ebpf-early-admission} is the complete decision helper. Its
+placement inside the shared initialiser makes the same narrow guard available
+to every producer that uses the framework from
+Section~\ref{subsec:implementation-shared-event-construction}.
+
+\begin{lstlisting}[
+    language=C,
+    caption={Exact effective-UID admission guard.},
+    label={lst:ebpf-early-admission}
+]
+statfunc bool should_drop_by_kernel_uid_filter(config_entry_t *config)
+{
+    if (config == NULL)
+        return false;
+    if (config->kernel_uid_filter_enabled == 0)
+        return false;
+    u32 current_uid = (u32) bpf_get_current_uid_gid();
+    return current_uid != config->kernel_uid_filter;
+}
+\end{lstlisting}
+
+A null configuration pointer or a disabled flag admits the event. When active,
+only a mismatch is dropped; no state is retained by the helper and no
+authorisation result is produced. The guard reduces construction and transport
+for excluded effective UIDs, while richer admission remains a user-space
+operation.
+
 After decoding, the effective event set, command-name filter and typed policy
 predicates form the user-space admission path. Rejected events reach neither
 raw presentation nor detector dispatch. The later \texttt{alerts-only} control
@@ -415,148 +665,105 @@ structure in the same way as the event contract.
 \section{Policy and Detector Engine}
 \label{sec:implementation-policy-detector}
 
-\subsection{YAML Policy and Detector Definitions}
-\label{subsec:implementation-yaml-definitions}
-
 Policy and detector paths may identify a YAML file or a directory. Directory
 loading is non-recursive and sorted by filename, giving deterministic catalogue
 construction. YAML documents are converted into internal definitions before
-the runtime consumes them, separating file syntax from the policy manager and
-detector interfaces.
+they are consumed. Policy conversion applies omitted mode and intent defaults
+and compiles compact argument filters into internal predicates. Unsupported
+compact forms are skipped, and the YAML decoders do not universally reject
+unknown fields. At event time, scope is tested before alternative rules;
+exclusions and matching suppress policies take precedence. An exact finite
+policy allow-list may also narrow the logical-event set before probe loading,
+as described in Section~\ref{sec:implementation-selection-filtering}.
 
-A policy contains a name, mode, intent, scope and at least one rule. Omitted
-mode and intent values default to monitoring and threat hunting. Scope is
-evaluated before rules; rules act as alternatives, while constraints within a
-rule are conjunctive. Event exclusion takes precedence within a selector, and
-a matching suppress policy overrides positive monitor or detect matches.
-Compact argument filters support equality, inequality and restricted
-leading-or-trailing wildcard matching. Unsupported compact filters are ignored
-during conversion rather than causing strict YAML rejection, and unknown YAML
-fields are not universally rejected.
+Detector parsing validates structural metadata, referenced event names,
+severity, time-window bounds, ATT\&CK identifier syntax and correlation
+compatibility. Runtime construction then normalises field and operator names,
+splits membership operands, parses numeric operands and compiles ordered steps
+and the correlation plan. Equality, inequality, containment, membership,
+prefix, suffix, existence, non-existence and numeric comparisons consequently
+run without reparsing the YAML representation. The registry rejects invalid or
+duplicate identities, and the dispatcher builds an event-name index once.
+Only detectors interested in the admitted logical event are invoked; a failure
+remains associated with its detector and does not stop the other candidates.
 
-A detector definition contains stable metadata, consumed events, optional
-state configuration, global conditions, ordered steps, output metadata, tags
-and optional ATT\&CK metadata. Validation occurs at two boundaries. Catalogue
-parsing validates structural fields, event references, severity, time-window
-bounds, ATT\&CK identifier syntax and correlation compatibility. Runtime
-construction then compiles the selected conditions, numeric constants and
-correlation plan and allocates detector-local state. Thus the catalogue is
-structurally validated before selection, but executable conditions are fully
-compiled only for selected detector instances.
+The stateless path evaluates global conditions and the event-specific
+condition group, then creates an alert from that single evidence event. A
+definition becomes an ordered stateful sequence only when it is marked
+stateful and contains more than one compiled step. Otherwise, multiple steps
+act as alternative event-specific groups rather than as temporal stages.
 
-In the current working tree, non-suppress policies can select detector
-definitions by detector ID, severity, tactic, technique, tag and statefulness.
-Values within one selector field are alternatives, while different populated
-fields are conjunctive. Exclusions apply within one policy, and the selected
-sets from separate policies are combined by union. The runtime verifies that a
-selecting policy names every event declared by the detector. If no selector is
-present, the complete configured catalogue retains the legacy loading
-behaviour. This detector-selection extension is present and tested locally but
-is not part of the audited repository commit, and should be committed before
-it is treated as the final implementation baseline.
-
-\subsection{Point and Collective Detection}
-\label{subsec:implementation-point-collective}
-
-Selected definitions are instantiated in a registry that rejects nil,
-invalid or duplicate detector identities and preserves deterministic ID order.
-A dispatcher builds an event-name index once, so an admitted event is offered
-only to detectors that consume its logical type. Detector errors retain the
-detector identity and do not prevent other candidates from evaluating the same
-event.
-
-Conditions are compiled before event processing. Field and operator names are
-normalised, membership lists are split, and numeric constants are parsed once.
-At runtime the evaluator resolves a field from the common context or a typed
-argument and applies equality, inequality, containment, membership, prefix,
-suffix, existence or numeric comparison. All global conditions must hold.
-
-A stateful definition with more than one compiled step allocates partial-match
-state. Listing~\ref{lst:collective-state-advance} shows the transition applied
-when an event is correlated with an existing sequence.
+For the stateful path, each correlation key owns the index of the next expected
+step, the first-observation time and the ordered evidence retained so far.
+Listing~\ref{lst:collective-state-advance} shows expiry handling and successful
+advancement for an existing key. Global-condition evaluation, key construction
+and first-step creation are omitted from the excerpt.
 
 \begin{lstlisting}[
     caption={Go state transition for a collective detector sequence (abridged).},
     label={lst:collective-state-advance}
 ]
-state, ok := d.state[key]
-if !ok {
-    continue
-}
-// The expired-state check is omitted.
-matches, err := stepMatches(event, d.steps[state.nextStep])
-if err != nil {
-    return nil, err
-}
-if matches {
-    state.events = append(state.events, event)
-    state.nextStep++
-    if state.nextStep >= len(d.steps) {
-        delete(d.state, key)
-        return []detectors.Alert{d.newAlertFromEvents(state.events)}, nil
+for _, key := range lookupKeys {
+    state, ok := d.state[key]
+    if !ok {
+        continue
     }
-    d.state[key] = state
-    return nil, nil
+    if now.Sub(state.firstSeen) > window {
+        delete(d.state, key)
+        continue
+    }
+    matches, err := stepMatches(event, d.steps[state.nextStep])
+    if err != nil {
+        return nil, err
+    }
+    if matches {
+        state.events = append(state.events, event)
+        state.nextStep++
+        if state.nextStep >= len(d.steps) {
+            delete(d.state, key)
+            return []detectors.Alert{d.newAlertFromEvents(state.events)}, nil
+        }
+        d.state[key] = state
+        return nil, nil
+    }
 }
 \end{lstlisting}
 
-The state records only the next expected step and the ordered evidence already
-matched. Completion removes the partial sequence before constructing the alert;
-otherwise the advanced state replaces its previous map value. New sequences
-are created separately when an event satisfies the first step. Non-stateful
-definitions allocate none of this state and treat multiple steps as alternative
-event-specific condition sets.
+Completion deletes the partial sequence before creating its alert. An
+intermediate transition writes the advanced state back, while a new first-step
+match starts or replaces the one sequence allowed for its key. The correlation
+plan is compiled into typed key components: process identity combines host PID
+and start time; process-tree lookup adds only the immediate parent candidate;
+resource identity requires device and inode without a pathname fallback; and
+cgroup identity requires a non-zero local identifier. Composite strategies are
+ordered conjunctions, so any missing component prevents key construction. The
+unsupported \texttt{user\_session} strategy is rejected rather than
+approximated from UID.
 
-\subsection{Local Correlation Strategies and Deduplication}
-\label{subsec:implementation-correlation-deduplication}
+An omitted stateful window defaults to two seconds and cannot exceed five
+seconds. Its deadline begins with the first observation and is not extended by
+later progress. Each detector retains at most 4,096 incomplete keys and one
+sequence per key; starting that key again replaces its previous state, while
+capacity pressure evicts the oldest first observation. The addressed state is
+checked for expiry on each relevant event, and unrelated state is scanned
+opportunistically at intervals no longer than one second. \texttt{Flush}
+removes expired entries without timeout alerts, but the main runtime does not
+schedule it periodically, so idle expired entries may remain until later
+activity or an external flush.
 
-Each collective detector compiles its correlation plan into key extractors.
-The process extractor combines host PID and process start time; the process-tree
-extractor additionally exposes the immediate parent as a candidate. The
-resource extractor requires typed device and inode arguments and does not fall
-back to pathname, while the cgroup extractor requires a non-zero local cgroup
-identifier. A composite extractor serialises an ordered conjunction of two or
-more dimensions and fails when any required component is unavailable.
+After evaluation, the engine deduplicates alerts over five seconds. Its key
+uses detector identity, title and severity together with the first evidence
+event's name, PID, UID, command and ordered arguments. Later evidence from a
+collective match is not part of that key, so different completions sharing the
+same first observation may be collapsed. This suppresses alert delivery only;
+it does not alter admitted events or detector sequence state.
 
-The state model is intentionally finite. An omitted stateful window defaults
-to two seconds and may not exceed five seconds. The deadline begins at the
-first matching step and is not extended by later progress. Each detector
-retains at most 4,096 incomplete keys and at most one partial sequence for each
-key. Starting the first step again replaces the previous incomplete sequence;
-capacity pressure removes the oldest partial match.
-
-Expired state is pruned opportunistically as relevant events arrive, with a
-scan interval no larger than one second. An explicit flush operation can also
-remove expired entries without producing timeout alerts. The main runtime does
-not currently schedule this flush periodically, so an idle detector can retain
-expired entries until another relevant event arrives or an external caller
-invokes the operation.
-
-After detector evaluation, the engine applies alert deduplication over a
-five-second interval. The key includes detector identity, title and severity
-and the first evidence event's name, PID, UID, command and ordered arguments.
-For a collective alert, later evidence is not part of this key. Two different
-completions sharing the same first observation can therefore be collapsed
-inside the deduplication interval. This stage suppresses repeated alert output;
-it neither changes raw events nor rewrites detector sequence state.
-
-\subsection{MITRE ATT\&CK Metadata Propagation}
-\label{subsec:implementation-attack-propagation}
-
-Detector YAML may include the framework and version together with tactics,
-techniques, data sources and data components. Definition validation checks the
-syntactic form of non-empty tactic and technique identifiers; it does not load
-an external ATT\&CK catalogue or infer mappings from event content.
-
-The metadata participates in two implemented paths. In the current local
-detector-selection extension, policies can select catalogue entries through
-exact tactic or technique identifiers during bootstrap. When a selected
-detector matches, its complete threat metadata is copied to the alert beside
-the retained evidence. The table and JSON output mechanisms then render the
-same classification differently, as described in
-Section~\ref{sec:implementation-output-logging}. Policy names are not added by
-the YAML detector implementation, because policies compile into shared runtime
-selection and admission rather than separate alert-producing branches.
+Finally, detector definitions may carry framework, version, tactic, technique,
+data-source and data-component fields. Validation accepts unmapped detectors
+and checks only the syntax of non-empty tactic and technique identifiers; no
+external ATT\&CK catalogue is consulted and mappings are not inferred. When a
+detector matches, its complete configured threat metadata is copied into the
+evidence-bearing alert passed to Section~\ref{sec:implementation-output-logging}.
 
 \section{Output and Structured Logging}
 \label{sec:implementation-output-logging}
@@ -596,7 +803,7 @@ event or alert output. Configuration errors that occur before logger creation
 are returned to the command entry point and printed as a concise outer error
 boundary.
 
-\section{Containerisation and Deployment}
+\section{Containerisation and Deployment Considerations}
 \label{sec:implementation-containerisation}
 
 The Dockerfile uses a builder and a runtime stage. The builder is based on Go
@@ -639,7 +846,11 @@ used by the RHEL 8 kernel family, in addition to older and newer upstream
 representations. Inode change-time extraction selects among the pre-6.6,
 6.6--6.10 and later layouts. The virtual-memory lookup helper traverses the
 red-black VMA tree only when that representation exists and does not
-approximate support for later maple-tree kernels.
+approximate support for later maple-tree kernels. This bounded helper remains
+available in the shared source but is not invoked by the host memory hooks
+described in Section~\ref{subsec:implementation-memory-namespace-hooks}; its
+presence must therefore not be interpreted as evidence collected by those
+events.
 
 Helper availability also changes the implementation path. Current syscall
 registers are obtained through BTF-aware task helpers when available. The
