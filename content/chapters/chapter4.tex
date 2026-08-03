@@ -1,0 +1,535 @@
+\chapter{System Implementation}
+\label{ch:system-implementation}
+
+This chapter describes how the design developed in Chapter~3 is realised in
+the prototype. The discussion begins with the build artefacts and then follows
+the mechanisms that construct, load, transport, decode, select and interpret
+runtime observations. Each mechanism is described in its primary location;
+later sections refer to that implementation rather than restating the complete
+event lifecycle. Experimental behaviour and performance measurements are
+reserved for Chapter~5.
+
+\section{Build Toolchain and Project Organisation}
+\label{sec:implementation-build-organisation}
+
+The build produces three dependent artefacts. First, the checked-out libbpf
+source is compiled as a local static archive together with its headers and
+package metadata. Second, Clang compiles the eBPF translation unit and its
+shared headers into an object with x86-64 target definitions. Finally, the Go command is
+built through CGO against the local libbpf archive and the local libbpfgo
+bindings. The aggregate build target preserves this order so that neither the
+eBPF compiler nor the Go linker can silently use a different system copy of
+the kernel-facing library.
+
+The generated eBPF object is an input to the Go build. A Go embedding directive
+places the object in the executable, so the object must exist before the Go
+package is compiled. The normal runtime path can consequently open the embedded
+bytes without requiring a separate object file beside the executable. An
+external object may still override the embedded asset for development and
+compatibility investigation, but this does not make the executable independent
+of the host: loading still depends on the target kernel, its BTF information,
+the required privileges and the runtime libraries required by the CGO-linked
+dependency chain.
+
+The source organisation follows the same ownership boundaries as the runtime.
+The C and eBPF sources contain collection programs and their shared
+serialisation helpers. The Go eBPF packages own loading, attachment and the
+record-consumption loop. Separate packages define the event registry, decoder,
+configuration, policy and detector models, output adapters and structured
+logging. This separation is reflected in the build graph without turning the
+repository layout into a runtime dependency: communication between components
+occurs through the event and detector contracts described below.
+
+\section{eBPF Program Implementation}
+\label{sec:implementation-ebpf-programs}
+
+The eBPF programs use one event-construction framework across heterogeneous
+hooks. A common context stores the timestamp, event and syscall identifiers,
+CPU and stack identifiers, effective UID, command and UTS names, cgroup and
+namespace identifiers, and process identities in namespace and host views.
+Event-specific values are appended to an indexed argument buffer. Scalar
+arguments are encoded at fixed width, whereas strings, byte sequences and
+arrays carry a bounded length before their payload.
+
+Large event structures are not allocated on the eBPF stack. A single-entry
+per-CPU array holds the current event workspace, and a second per-CPU map
+provides reusable scratch areas for paths and intermediate structures. Bounded
+LRU maps retain process and task information across invocations. This
+arrangement gives each CPU an independent construction area while keeping the
+large 32,000-byte argument buffer outside the verifier-constrained stack.
+
+Common initialisation obtains the per-CPU workspace and global configuration,
+applies the optional effective-UID guard, resets the previous argument state,
+and records the minimum event identity. Full task-context enrichment is
+deferred until submission. A hook therefore performs only its event-specific
+reads before the submission helper refreshes the context, calculates the exact
+record length and writes the event to the perf-event array. Events rejected by
+the UID guard therefore return before full enrichment and transport.
+
+The entry-only and paired construction models introduced in Chapter~3 share
+this framework. Paired programs retain up to seven entry arguments in a hash
+map keyed by logical event ID and thread ID. The corresponding exit or return
+program loads and removes that state, appends the result and submits one
+logical event. Including the event ID prevents temporary state for different
+logical operations on the same thread from colliding.
+
+\subsection{Process Lifecycle and Execution Hooks}
+\label{subsec:implementation-process-hooks}
+
+Process execution is represented at several complementary stages. The
+\texttt{execve} and \texttt{execveat} entry programs capture the attempted
+pathname and a bounded argument vector while the user-space pointers are still
+available. The latter also retains its directory file descriptor and flags.
+Later security-related probes expose the resolved executable and credential
+preparation state, while the scheduler execution tracepoint records the
+successful replacement of the process image. A separate entry/exit pair emits
+an execution-failure event only when the syscall result is negative.
+
+Scheduler fork and exit observations need no temporary return-side state
+because the tracepoint itself represents the transition of interest. Task
+renaming follows the same direct-submission pattern. The distinct semantics of
+the execution stages are defined in
+Section~\ref{subsec:hook-selection-logical-events}.
+
+Argument-vector capture is bounded in both element count and total buffer
+space. The serialiser accepts at most 38 strings and writes a truncation marker
+when further entries cannot be represented. This retains useful command
+evidence while keeping loop exploration and event size predictable for the
+target verifier.
+
+\subsection{Credentials and Privilege Hooks}
+\label{subsec:implementation-credential-hooks}
+
+Credential monitoring combines mediation observations, committed state and
+syscall outcomes. The set-UID security hook compares the old and proposed
+credentials and serialises the real, effective, saved and filesystem user
+identifiers together with the kernel operation flag. Requests that do not
+change a relevant value are suppressed. Since this probe runs at function
+entry, the event describes a proposed transition rather than the final syscall
+result.
+
+The credential-commit probe provides a second view. It compares the active
+credential object with its replacement and emits only when the user, group or
+capability state changes. The payload uses a compact fixed representation for
+the identifier and capability sets, insulating the user-space decoder from the
+different in-kernel capability layouts handled by the CO-RE reads.
+
+Dedicated entry/exit pairs cover the set-user and set-group syscall families.
+Their entry programs retain the identifiers requested by the caller, and their
+exit programs append the returned status. Together, the three views distinguish
+what was requested, what was considered by the security path, and what state
+was committed. Capability checks and selected process-control operations use
+the same common context but submit directly when their security-relevant input
+is already available at one hook.
+
+\subsection{Filesystem, Memory and Namespace Hooks}
+\label{subsec:implementation-filesystem-memory-namespace-hooks}
+
+The file-open security probe demonstrates enrichment based on a resolved kernel
+object. It reconstructs the file path in a per-CPU buffer and emits the open
+flags, device, inode and change time. Where the active syscall context is
+available, the original pathname is also retained. The two paths can differ,
+for example after symbolic-link or mount resolution, and are therefore stored
+as separate arguments. Path reconstruction follows mount transitions and
+disconnected dentries but stops after 20 components.
+
+The logical \texttt{open} event uses a different pattern. Entry tracepoints for
+\texttt{open} and \texttt{openat} store the request, while their exit
+tracepoints complete the record with the returned file descriptor or error.
+Several physical probes thus produce the same event schema, with an operation
+argument preserving the originating syscall variant. The chmod and chown
+families reuse this model for their path-based and descriptor-based variants.
+
+Memory-related syscall events are also completed at exit so that the requested
+address, length and protection flags remain associated with the returned
+status. Dedicated typed tracepoints are used for these operations on the
+target kernel. Process-to-process memory events retain vector metadata but do
+not copy the transferred memory payload, which bounds both event size and the
+amount of sensitive data transported by the monitor.
+
+Namespace monitoring separates requested operations from observed state
+changes. Paired \texttt{setns} and \texttt{unshare} programs include the
+syscall result. A namespace-switch probe instead compares old and new namespace
+identifiers and suppresses assignments that do not produce a relevant change.
+Cgroup task and directory activity is represented through similarly focused
+events rather than by constructing a persistent workload graph in kernel
+space.
+
+\subsection{Kernel Integrity and eBPF Activity Hooks}
+\label{subsec:implementation-kernel-integrity-hooks}
+
+The kernel-integrity family combines compact entry observations with paired
+programs where the outcome changes the event meaning. Security hooks for BPF
+commands, maps and programs emit the command or object identity and selected
+type information. They avoid copying the complete syscall attribute union,
+whose interpretation depends on the command and would substantially enlarge
+the kernel-side parser.
+
+Module tracepoints report module load and removal identities. An additional
+entry/return pair for module initialisation associates the module information
+with its final status. The same temporary-state mechanism joins a requested
+kernel symbol with the address returned by symbol lookup, and joins kprobe
+registration data with the registration result. Procfs creation and user-mode
+helper invocation are high-signal entry observations whose relevant request
+data are already available at one point.
+
+These hooks remain observational: they neither reconstruct hidden module lists
+nor establish kernel integrity or deny the operations they report.
+
+\section{Loader, Probe Registry and Attachment Lifecycle}
+\label{sec:implementation-loader-registry}
+
+Runtime construction begins after configuration and external rule documents
+have been accepted. Object resolution gives precedence to an environment
+override, then to an explicit path, and finally to the embedded object produced
+in Section~\ref{sec:implementation-build-organisation}. BTF resolution is
+independent and similarly permits an environment or configuration override
+before using \path{/sys/kernel/btf/vmlinux}.
+
+The effective logical-event set is established before the object is loaded.
+The probe registry converts that set into program specifications containing the
+compiled program name, physical hook, attachment kind and implied internal
+dependencies. Public producers correspond to selectable decoder events,
+whereas internal specifications supply state or enrichment without appearing
+in event listing. Dependency expansion therefore supports both multi-program
+logical events and public events that require hidden support probes.
+
+Before libbpf loads the object, autoload is disabled for registered programs
+outside the resolved selection. Verification and relocation are consequently
+avoided for those registered sections. This optimisation is bounded by the
+registry: a program omitted from it cannot be disabled through this planning
+step, so registry completeness is part of the loading correctness boundary.
+
+After object loading, the runtime updates configuration maps, creates the perf
+reader and attaches each selected program according to its registry kind. Raw
+tracepoints, tracepoints, kprobes and kretprobes use their corresponding
+libbpfgo attachment paths. Every successful attachment is retained as an owned
+link.
+
+The active loop consumes perf records until cancellation. Shutdown destroys
+links in reverse acquisition order, releases any runtime-managed cgroup mount,
+closes the perf reader and then closes the loaded module. This order preserves
+resource ownership across partial initialisation and normal shutdown.
+
+\section{Binary Event Contract and Kernel Transport}
+\label{sec:implementation-binary-contract}
+
+An ordinary event record consists of a 136-byte common context, a one-byte
+argument count and a variable stream of indexed arguments. The Go context
+mirrors the C field order explicitly. This fixed boundary is followed by only
+the bytes actually used in the argument buffer, so a short event does not
+transport the full 32,000-byte workspace.
+
+Each argument starts with its one-byte schema index. A scalar payload follows
+at the width defined by the event registry. Variable-length values add a
+four-byte size field before their content, while string and compact argument
+arrays use bounded sub-records. No independent wire type tag is transmitted.
+The index selects the name and type from the user-space schema, allowing
+arguments that could not be captured to be omitted without changing the
+identity of later arguments.
+
+The kernel save helpers track both the next buffer offset and the offset of
+each argument. Every variable write checks the available capacity before
+copying. This explicit check is necessary because 32,000 is not a power of
+two. An earlier implementation masked offsets with the buffer size minus one;
+for longer records this folded valid positions onto earlier bytes. The current
+implementation preserves the checked offset and exposes its upper bound to the
+older verifier without altering its value.
+
+At submission, the common helper enriches the task context, optionally records
+a user-space stack identifier, computes the fixed and variable portions of the
+record and calls \texttt{bpf\_perf\_event\_output} for the current CPU. The
+\texttt{events} map is a perf-event array, and the Go runtime creates one
+libbpfgo perf reader over it. No BPF ring-buffer transport path is retained in
+the current implementation.
+
+Per-CPU losses are reported through the reader's loss channel, while records
+that arrive but fail structural decoding follow a separate diagnostic path.
+The capacity and ordering implications of perf-event transport are discussed
+in Section~\ref{subsec:perf-buffer-failure-boundaries}.
+
+\section{User-Space Decoder and Event Registry}
+\label{sec:implementation-decoder-registry}
+
+The decoder reads the fixed context in little-endian field order, obtains the
+argument count and resolves the numeric event identifier. Each argument index
+selects its declaration and payload decoder from the event registry. Decoded
+values are reordered according to that schema and returned as the typed event
+consumed directly by policies and detectors. The output adapter introduced in
+Section~\ref{sec:implementation-output-logging} is a presentation model, not a
+second security-event normalisation stage.
+
+The decoder rejects a truncated fixed context, unknown event identifiers,
+argument indexes outside the selected schema, truncated scalar or variable
+payloads, oversized variable-length fields and invalid UTF-8 in textual
+payloads. Since the wire format carries no type tag, it cannot independently
+compare a transmitted type with the schema: structurally incompatible data
+fail during decoding, while byte-compatible data are interpreted as the
+registered type.
+
+The boundary is intentionally tolerant of partial event enrichment. Missing
+arguments are accepted, and a duplicate index replaces the previous value for
+that index. The implementation also does not require every trailing byte to be
+consumed. The resulting guarantee is therefore bounded, schema-directed
+interpretation rather than a unique canonical encoding. Unknown or
+structurally unsafe records are diagnosed and discarded without terminating
+the reader loop.
+
+Consistency tests across the event and probe registries ensure that ordinary
+public probes have decoder definitions,
+decoder events are publicly producible, internal probes remain hidden, and
+multi-probe families retain their expected composition. Numeric C and Go event
+constants are still synchronised by maintenance discipline rather than by an
+automated cross-language constant comparison, making this interface a notable
+compatibility obligation.
+
+\section{Event Selection and Kernel-Side Filtering}
+\label{sec:implementation-selection-filtering}
+
+During probe planning, CLI selection, explicit exclusions and any finite
+policy-derived allow-list determine which registered programs retain autoload
+and attachment. This changes the producer set before collection begins.
+
+The exact effective-UID guard runs during common eBPF initialisation. User space
+updates two fields in the singleton configuration map: an enable
+flag and one 32-bit UID. When enabled, the program compares that value with the
+effective UID returned for the current task and exits before complete context
+enrichment and submission on a mismatch. This is a single equality filter. It
+does not implement ranges, exclusion sets, namespace-aware identities or a
+general kernel policy language.
+
+After decoding, the effective event set, command-name filter and typed policy
+predicates form the user-space admission path. Rejected events reach neither
+raw presentation nor detector dispatch. The later \texttt{alerts-only} control
+suppresses raw presentation without bypassing detector evaluation.
+
+The configuration-map update currently depends on an explicit C layout. The
+Go runtime patches the filter-enable field at byte offset 12 and the UID at
+byte offset 16 after checking the map value size. The complete C configuration
+structure is not mirrored in Go, and no loaded-object integration test reads
+these fields back. The offsets must consequently evolve together with the C
+structure in the same way as the event contract.
+
+\section{Policy and Detector Engine}
+\label{sec:implementation-policy-detector}
+
+\subsection{YAML Policy and Detector Definitions}
+\label{subsec:implementation-yaml-definitions}
+
+Policy and detector paths may identify a YAML file or a directory. Directory
+loading is non-recursive and sorted by filename, giving deterministic catalogue
+construction. YAML documents are converted into internal definitions before
+the runtime consumes them, separating file syntax from the policy manager and
+detector interfaces.
+
+A policy contains a name, mode, intent, scope and at least one rule. Omitted
+mode and intent values default to monitoring and threat hunting. Scope is
+evaluated before rules; rules act as alternatives, while constraints within a
+rule are conjunctive. Event exclusion takes precedence within a selector, and
+a matching suppress policy overrides positive monitor or detect matches.
+Compact argument filters support equality, inequality and restricted
+leading-or-trailing wildcard matching. Unsupported compact filters are ignored
+during conversion rather than causing strict YAML rejection, and unknown YAML
+fields are not universally rejected.
+
+A detector definition contains stable metadata, consumed events, optional
+state configuration, global conditions, ordered steps, output metadata, tags
+and optional ATT\&CK metadata. Validation occurs at two boundaries. Catalogue
+parsing validates structural fields, event references, severity, time-window
+bounds, ATT\&CK identifier syntax and correlation compatibility. Runtime
+construction then compiles the selected conditions, numeric constants and
+correlation plan and allocates detector-local state. Thus the catalogue is
+structurally validated before selection, but executable conditions are fully
+compiled only for selected detector instances.
+
+In the current working tree, non-suppress policies can select detector
+definitions by detector ID, severity, tactic, technique, tag and statefulness.
+Values within one selector field are alternatives, while different populated
+fields are conjunctive. Exclusions apply within one policy, and the selected
+sets from separate policies are combined by union. The runtime verifies that a
+selecting policy names every event declared by the detector. If no selector is
+present, the complete configured catalogue retains the legacy loading
+behaviour. This detector-selection extension is present and tested locally but
+is not part of the audited repository commit, and should be committed before
+it is treated as the final implementation baseline.
+
+\subsection{Point and Collective Detection}
+\label{subsec:implementation-point-collective}
+
+Selected definitions are instantiated in a registry that rejects nil,
+invalid or duplicate detector identities and preserves deterministic ID order.
+A dispatcher builds an event-name index once, so an admitted event is offered
+only to detectors that consume its logical type. Detector errors retain the
+detector identity and do not prevent other candidates from evaluating the same
+event.
+
+Conditions are compiled before event processing. Field and operator names are
+normalised, membership lists are split, and numeric constants are parsed once.
+At runtime the evaluator resolves a field from the common context or a typed
+argument and applies equality, inequality, containment, membership, prefix,
+suffix, existence or numeric comparison. All global conditions must hold.
+
+A stateful definition with more than one compiled step allocates partial-match
+state. An event may create that state, advance the next expected step or
+complete the sequence; each advancing event is retained in arrival order as
+alert evidence. All other matching definitions emit directly. In particular,
+a non-stateful definition with several steps treats them as alternative
+event-specific condition sets rather than as a temporal sequence.
+
+\subsection{Local Correlation Strategies and Deduplication}
+\label{subsec:implementation-correlation-deduplication}
+
+Each collective detector compiles its correlation plan into key extractors.
+The process extractor combines host PID and process start time; the process-tree
+extractor additionally exposes the immediate parent as a candidate. The
+resource extractor requires typed device and inode arguments and does not fall
+back to pathname, while the cgroup extractor requires a non-zero local cgroup
+identifier. A composite extractor serialises an ordered conjunction of two or
+more dimensions and fails when any required component is unavailable.
+
+The state model is intentionally finite. An omitted stateful window defaults
+to two seconds and may not exceed five seconds. The deadline begins at the
+first matching step and is not extended by later progress. Each detector
+retains at most 4,096 incomplete keys and at most one partial sequence for each
+key. Starting the first step again replaces the previous incomplete sequence;
+capacity pressure removes the oldest partial match.
+
+Expired state is pruned opportunistically as relevant events arrive, with a
+scan interval no larger than one second. An explicit flush operation can also
+remove expired entries without producing timeout alerts. The main runtime does
+not currently schedule this flush periodically, so an idle detector can retain
+expired entries until another relevant event arrives or an external caller
+invokes the operation.
+
+After detector evaluation, the engine applies alert deduplication over a
+five-second interval. The key includes detector identity, title and severity
+and the first evidence event's name, PID, UID, command and ordered arguments.
+For a collective alert, later evidence is not part of this key. Two different
+completions sharing the same first observation can therefore be collapsed
+inside the deduplication interval. This stage suppresses repeated alert output;
+it neither changes raw events nor rewrites detector sequence state.
+
+\subsection{MITRE ATT\&CK Metadata Propagation}
+\label{subsec:implementation-attack-propagation}
+
+Detector YAML may include the framework and version together with tactics,
+techniques, data sources and data components. Definition validation checks the
+syntactic form of non-empty tactic and technique identifiers; it does not load
+an external ATT\&CK catalogue or infer mappings from event content.
+
+The metadata participates in two implemented paths. In the current local
+detector-selection extension, policies can select catalogue entries through
+exact tactic or technique identifiers during bootstrap. When a selected
+detector matches, its complete threat metadata is copied to the alert beside
+the retained evidence. The table and JSON output mechanisms then render the
+same classification differently, as described in
+Section~\ref{sec:implementation-output-logging}. Policy names are not added by
+the YAML detector implementation, because policies compile into shared runtime
+selection and admission rather than separate alert-producing branches.
+
+\section{Output and Structured Logging}
+\label{sec:implementation-output-logging}
+
+Independent event and alert printers support line-oriented JSON and compact
+table formats on standard output. Operational diagnostics instead use the Zap
+logger on standard error and do not participate in security-data
+serialisation.
+
+Before JSON rendering, a decoded event is adapted to a presentation record that
+groups process, host and kernel metadata, converts fixed-size C strings and
+retains typed arguments. Table output
+selects a smaller set of fields and resolves selected numeric values, including
+signals, capabilities, operation flags, file descriptors and error numbers,
+into readable labels while retaining their numeric meaning.
+
+An alert record contains detector identity, title, severity, timestamp,
+metadata, ATT\&CK classification and the retained event evidence. Point-alert
+table output includes a source-event summary. Collective-alert output instead
+prints the ordered evidence sequence and avoids repeating its first event in
+separate source fields. The rendered sequence is bounded to 1,024 characters
+and is truncated with an ellipsis when necessary. Structured JSON preserves
+the complete evidence representation supplied to the output adapter.
+
+Operational diagnostics are implemented with Zap \cite{uber_zap}. The logger
+supports console and JSON encodings and debug, info, warning and error
+thresholds. It uses ISO-8601 timestamps, disables caller and stack-trace fields,
+and writes to standard error. Runtime startup, attachment, transport loss,
+decoding failures, detector failures, output errors and cleanup conditions use
+this path.
+
+Libbpf diagnostics enter through a callback and receive a structured source
+field. Libbpf warnings are mapped to warning records; other admitted messages
+are mapped to debug records. Combined callback and Zap level filtering keeps
+CO-RE relocation detail available for diagnosis without mixing it into normal
+event or alert output. Configuration errors that occur before logger creation
+are returned to the command entry point and printed as a concise outer error
+boundary.
+
+\section{Containerisation and Deployment}
+\label{sec:implementation-containerisation}
+
+The Dockerfile uses a builder and a runtime stage. The builder is based on Go
+1.22 and Debian Bookworm and installs the C, LLVM, libelf and zlib development
+dependencies required by the same aggregate build used on the host. It copies
+the complete source tree because the Go module replaces libbpfgo with the local
+third-party checkout. The final Debian slim stage installs only the libelf and
+zlib runtime libraries and copies the generated executable.
+
+The final image does not need a separate eBPF object because that object is
+embedded in the executable. In the current Dockerfile, however, the policy and
+detector YAML catalogues are not copied into the runtime stage. A container
+that uses those external definitions must therefore receive them through a
+mounted path or be built from a derivative image that includes them. This is a
+packaging boundary rather than an event-processing limitation.
+
+The container continues to operate against the host kernel. The supplied run
+target grants privileged execution, joins the host PID and cgroup namespaces,
+and exposes host BTF and bpffs paths; it is not a least-privilege deployment
+profile. The target does not mount tracefs or debugfs explicitly, so hosts on
+which libbpf requires those paths for selected tracepoints need an additional
+mount or an adjusted launch command.
+
+No Kubernetes deployment resources are part of the repository; node-level
+deployment and cluster-wide alert aggregation remain external integration work.
+
+\section{Compatibility and Verifier Challenges}
+\label{sec:implementation-compatibility-verifier}
+
+CO-RE reads are combined with explicit compatibility branches rather than
+being treated as a complete portability solution. Task PID access selects
+between the older PID-link representation and the newer thread-PID field.
+Task start-time extraction chooses among boot-time, real-start-time and
+start-time fields according to field and helper availability. Capability reads
+similarly support the older pair of 32-bit words and the newer 64-bit
+representation.
+
+The cgroup identifier path contains a dedicated branch for the hidden layout
+used by the RHEL 8 kernel family, in addition to older and newer upstream
+representations. Inode change-time extraction selects among the pre-6.6,
+6.6--6.10 and later layouts. The virtual-memory lookup helper traverses the
+red-black VMA tree only when that representation exists and does not
+approximate support for later maple-tree kernels.
+
+Helper availability also changes the implementation path. Current syscall
+registers are obtained through BTF-aware task helpers when available. The
+fallback derives the register frame from the task stack and is explicitly tied
+to x86-64 assumptions: 4 KiB pages, a 16 KiB kernel stack and no KASAN stack
+expansion. Compatible 32-bit tasks are identified through their thread status,
+and their syscall numbers are translated through a dedicated map before event
+classification.
+
+Several numeric limits arise from verifier behaviour rather than from the
+security model. Path reconstruction, string-array traversal and VMA lookup use
+fixed loop bounds; variable buffer writes repeat explicit range checks after
+helper calls; and the submitted record length is clamped through
+verifier-visible operations. The shared syscall-exit path restricts the return
+argument index to less than 16 because the target Rocky Linux verifier did not
+accept the broader generic bound. Dedicated typed tracepoints are used for
+selected memory syscalls to keep the target path simpler than the generic
+dispatcher.
+
+These branches adapt one object across compatible layouts but cannot provide
+unavailable symbols, hooks, helpers or attachment mechanisms. As established
+in Section~\ref{subsec:ebpf-btf-core}, the implementation therefore claims
+compatibility with the identified Rocky Linux target rather than unconditional
+portability across Linux versions.
