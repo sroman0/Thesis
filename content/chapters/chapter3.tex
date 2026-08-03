@@ -133,15 +133,10 @@ rather than individual commands or source-code components.
     \label{tab:functional-requirements}
 \end{table}
 
-Together, these requirements define the complete monitoring path. Event
-selection determines which kernel observations are produced, while the shared
-contract connects kernel collection to the normalised user-space model.
-Policies constrain the admitted event domain and may also restrict the detector
-catalogue during bootstrap. The selected detectors are then constructed within
-a separate engine and derive evidence-preserving alerts from the resulting
-event stream. The remaining requirements ensure that telemetry, security
-results, and operational failures retain distinct meanings throughout the
-runtime lifecycle.
+Together, these requirements establish the boundaries developed in the
+remainder of the chapter. FR-01--FR-03 concern collection and the event
+contract, FR-04--FR-06 define the analytical path, and FR-07--FR-08 govern
+presentation and runtime lifecycle.
 
 \subsection{Non-Functional and Operational Requirements}
 \label{subsec:nonfunctional-operational-requirements}
@@ -281,9 +276,7 @@ through an output path distinct from raw event presentation.
 The diagnostic path is implemented through the structured Zap logging library
 \cite{uber_zap}, forming a third independent stream. These diagnostics describe 
 conditions affecting the control or data path while remaining distinct from both 
-monitored events and detector alerts. These records may describe conditions 
-affecting either the control path or the data path, but they are not represented 
-as monitored events or detector alerts.
+monitored events and detector alerts.
 
 The boundary is therefore selective rather than absolute. User space controls
 which kernel programs are loaded and may configure the narrow kernel-side UID
@@ -622,37 +615,6 @@ are subsequently resolved through the probe registry into their producer and
 support probes, while unrelated registered programs are excluded from
 autoload.
 
-%Startup is ordered so that the configuration and external definitions are
-%accepted before kernel resources are acquired. The runtime normalises and
-%validates the configuration, resolves the eBPF object and BTF source, and then
-%loads and validates the policy and detector definitions. Active policies may
-%narrow the effective event scope and detector catalogue during this bootstrap
-%phase, before the detector runtime is constructed. The selected logical events
-%are subsequently resolved through the probe registry into their producer and
-%support probes, while unrelated registered programs are excluded from
-%autoload.
-%
-%Once this control state is complete, libbpf applies the required relocations
-%and submits the remaining programs to the kernel for verification and loading.
-%After a successful load, the runtime writes the optional kernel-side filter
-%configuration, starts the perf-buffer consumer, and attaches the selected
-%probes. The event loop then waits for records, lost-record notifications,
-%transport closure, or cancellation. Monitoring begins only after these steps
-%have succeeded, preventing the data path from operating with a partially
-%accepted configuration or an incomplete attachment set.
-%
-%Setup failures are fatal because the requested observation domain cannot be
-%trusted when object loading, verification, transport initialisation, or
-%attachment fails. Event-local failures are handled differently: malformed
-%records, detector errors, and presentation failures are reported through
-%operational diagnostics and confined to the affected processing operation, so
-%that subsequent records can still be handled.
-%
-%Cancellation triggers the ordered release of retained attachment, transport,
-%and loader-owned resources. Cleanup is attempted even when initialisation was
-%only partially completed; the concrete destruction sequence and the treatment
-%of cleanup and logging errors are discussed in Chapter~4.
-
 \subsection{Decoding, Normalisation and Event Registration}
 \label{subsec:decoding-normalisation-registration}
 
@@ -744,168 +706,167 @@ Figures~\ref{fig:kernel-userspace-architecture} and~\ref{fig:binary-event-contra
 \section{Policy and Detection Architecture}
 \label{sec:policy-detection-architecture}
 
-Policies and detectors are separate, configuration-driven stages over the
-normalised event stream. This separation follows an established runtime
-security pattern rather than constituting novelty by itself. Its role in the
-prototype is to keep collection scope, detector selection, security
-interpretation, and presentation independently configurable within a bounded
-host-local design.
+Section~\ref{sec:overall-system-architecture} introduced the control and data
+paths of the complete monitoring system. This section narrows that view to the
+user-space analytical subsystem. Its architecture is defined by two moments:
+bootstrap compiles policy and detector documents into an execution plan, while
+event-time processing applies that plan to admitted observations. Policies
+participate in both moments by shaping the plan and retaining the runtime
+admission rules that could not be resolved earlier. Detectors enter only after
+catalogue selection and interpret the admitted stream through a shared,
+indexed engine. This arrangement avoids reparsing configuration or searching
+the complete detector catalogue on the event hot path.
 
 \subsection{Policy-Based Event Scope}
 \label{subsec:policy-based-event-scope}
 
-A policy defines the portion of the monitored domain that is relevant to a
-particular runtime configuration. Its event rules determine whether a
-normalised event is admitted according to its identity and selected process
-attributes. Suppression rules take precedence over non-suppressive matches,
-while the absence of configured policies leaves the decoded event stream
-unrestricted by this layer.
+Policies contribute to the execution plan at two different architectural
+boundaries. First, their event selectors may reduce collection before the eBPF
+object is loaded. This optimisation is possible only when every active
+non-suppressive rule describes an explicit event set. The combined policy set
+is then intersected with any event selection supplied by the operator, after
+which the probe registry resolves the producer probes and their internal
+dependencies. A policy containing an open-ended selector cannot be converted
+into an exact attachment plan, so the runtime conservatively retains the wider
+collection scope.
 
-Part of this scope can be resolved before monitoring begins. When the active
-non-suppressive rules provide explicit event allowlists, their combined event
-domain can narrow the selection passed to the probe registry. An event scope
-also supplied through the remaining configuration is combined with this result
-before the required producer and support probes are resolved. Constraints that
-depend on decoded process information, together with suppression decisions,
-remain in the user-space path. Policy handling is therefore divided between an
-optional bootstrap-time reduction of the observation domain and an
-authoritative admission decision over decoded events; it is not implemented as
-a complete kernel-side policy engine.
+Second, policies reduce the detector catalogue before detector instances are
+created. The complete catalogue is parsed and validated first; policy selectors
+then choose definitions by identity or by descriptive properties, including
+severity, tags, statefulness, and MITRE ATT\&CK tactics or techniques. Selection
+is therefore a configuration-plane operation rather than a condition checked
+for every event. Excluded definitions allocate no detector or correlation
+state. The bootstrap validation also checks that a policy selecting a detector
+admits all events required by that detector, preventing an apparently active
+analysis from being constructed without its inputs.
 
-Policies may also restrict the configured detector catalogue during bootstrap.
-Detector selectors can refer to explicit detector identifiers or to metadata
-such as severity, MITRE ATT\&CK classification, tags, and whether a detector
-retains state. Values within the same selector category are combined as
-alternatives, while constraints from different categories must be satisfied
-together. Exclusions take precedence over inclusions, and the selections
-produced by multiple non-suppressive policies are combined before the detector
-engine is constructed.
-
-This detector selection remains separate from event admission. It determines
-which configured detector definitions are instantiated and therefore avoids
-allocating runtime or correlation state for excluded detectors, but it does not
-create distinct detector pipelines for individual policies. Policy mode and
-intent metadata do not alter the execution model, and matched policy names are
-not automatically propagated into detector alerts. These boundaries distinguish
-the implemented scope model from the broader policy capabilities reviewed in
-Chapter~2.
+The runtime policy manager retains the constraints that cannot be resolved at
+bootstrap. It evaluates the decoded event identity, command name, user
+identity, and selected typed arguments. Suppression takes precedence over
+positive matches; an admitted event continues through the shared data path,
+whereas a rejected event reaches neither raw-event output nor detectors. In the
+absence of policies this boundary is permissive. Policies do not create one
+isolated detector engine per policy, and their descriptive mode and intent do
+not currently imply different execution pipelines. They instead compile into
+one effective collection plan, one selected detector set, and one event
+admission boundary.
 
 \subsection{Point and Collective Detectors}
 \label{subsec:point-collective-detectors}
 
-Detector definitions are loaded independently from policies. Their event
-references and conditions are validated before the runtime begins, and the
-dispatcher indexes them by the events they consume. This avoids evaluating
-every detector for every event and isolates a detector-local error from the
-remaining detector set.
+The selected detector definitions are compiled into a runtime registry. This
+registry owns a deterministic set of detector instances, while a separate
+dispatch index maps each event type to the detectors that consume it. The
+index is built once and keeps the hot path proportional to the interested
+detectors rather than to the complete catalogue. A failure produced by one
+detector is returned with that detector's identity and does not prevent other
+candidates from processing the same event.
 
-A point detector evaluates deterministic predicates over one normalised event.
-When the predicates match, it creates an alert containing that source event.
-A collective detector instead defines an ordered sequence of event conditions.
-It retains a partial match until a later admitted event advances the sequence,
-the sequence completes, or its local state is discarded. Neither model learns
-a behavioural baseline or calculates a statistical anomaly score.
+Every admitted event is passed to this layer in the same decoded representation
+used by policy matching; there is no detector-specific event conversion. A
+point detector applies deterministic predicates to one such event and emits a
+result immediately when they hold. A collective detector applies predicates to
+an ordered sequence and therefore owns bounded partial-match state. Both are
+instances of the same detector contract and share lifecycle, dispatch, error,
+metric, and alert handling. Their architectural difference is state ownership,
+not a separate processing pipeline.
 
-Detector event declarations are consumer requirements, not attachment
-instructions. They are checked against the event registry, but they do not
-automatically enlarge the collection scope. An operator must select compatible
-events through the monitoring configuration or policies. A valid detector may
-otherwise remain inactive because one of its required observations is not
-produced.
-
-Sequence order is the order in which events arrive at the user-space detector
-engine. The design does not search backwards, reorder observations, or infer a
-causal graph. This bounded model supports the short collective patterns defined
-for the prototype while avoiding a claim of general complex-event processing
-\cite{cugola2012processing,agrawal2008eventstreams}.
+Detector declarations describe consumption requirements rather than directly
+attaching probes. The policy and probe-planning stages must make the required
+observations available before the registry is built. Once monitoring begins,
+the detector engine does not modify the collection plan. This preserves a
+one-way dependency from collection planning to analysis and prevents a
+detector from changing kernel instrumentation while events are being
+processed.
 
 \subsection{Bounded Local Correlation}
 \label{subsec:bounded-local-correlation}
 
-Each collective detector defines how the events in its ordered sequence must
-be related. The available local relationships distinguish a stable process, an
-immediate parent-to-child transition, the same file resource, the same local
-cgroup, or a conjunction of these dimensions. A partial match is retained only
-within a short configurable interval and a bounded number of correlation keys.
-When the sequence completes, the alert preserves the ordered events that
-satisfied it; otherwise, the incomplete state expires, is replaced for the
-same key, or is evicted.
+For a collective detector, the bootstrap phase compiles both its ordered steps
+and its correlation strategy. At runtime an admitted event is first associated
+with one or more local correlation keys. It may advance the next expected step
+of an existing partial match; if it instead satisfies the first step, it starts
+or replaces the partial match for that key. Completion produces one alert from
+the accumulated evidence. Sequence order is therefore user-space arrival order:
+the engine neither searches historical output nor reorders events to infer a
+different causal sequence.
 
-Stable process correlation distinguishes separate process lifetimes even when
-the operating system later reuses the same numeric process identifier.
-Process-tree correlation remains deliberately shallow: a sequence may stay
-within one process or move from a parent observation to its immediate child,
-but it does not traverse arbitrary ancestry or construct a persistent process
-graph.
+The correlation plan determines which observations may share state. Process
+correlation combines the host process identifier with process start time, so a
+reused numeric identifier does not join separate lifetimes. Process-tree
+correlation additionally permits an immediate parent-to-child transition, but
+does not build or traverse a persistent ancestry graph. Resource correlation
+uses the device and inode exposed by compatible file events, thereby identifying
+a local file object without treating a pathname as stable identity. Cgroup
+correlation uses the kernel cgroup identifier as a node-local execution-domain
+key and does not infer Kubernetes workload or cluster identity. When several
+dimensions are configured, their identities form a conjunctive composite key;
+every component must be available and agree.
 
-Resource correlation identifies the same local file object rather than relying
-on a pathname string. This permits related activity from different processes
-to be joined while avoiding the assumption that an equal path always denotes
-the same object. Cgroup correlation can similarly connect processes sharing a
-local kernel cgroup identity. It does not attribute events to a Kubernetes pod,
-workload, tenant, or cluster-wide identity.
-
-A composite relationship requires every configured dimension to agree; it is
-a conjunction rather than a fallback among alternative keys. User-session
-correlation is rejected because the normalised event model does not expose a
-stable session identity, and UID alone would merge unrelated activity.
-
-Only one partial sequence is retained for a detector and correlation key. A
-new first step for that key can replace the existing incomplete sequence.
-State is bounded by time and by a per-detector key limit, although total memory
-also depends on detector count, sequence length, and retained event payloads.
-Expired state is reclaimed during relevant detector activity or an explicit
-flush, not by a general periodic scheduler in the main runtime.
+State is deliberately detector-local and bounded. Each key identifies at most
+one incomplete sequence, each sequence has a short maximum lifetime, and each
+detector has a finite state capacity. Expiration is checked as relevant events
+are processed and when detector state is flushed; capacity pressure removes the
+oldest incomplete state. A requested correlation dimension is rejected during
+bootstrap if the event model cannot support it reliably. This is why user
+session correlation is not approximated from UID: doing so would silently join
+unrelated sessions. The design supports short point-to-point and collective
+relationships without becoming a persistent process graph or a general-purpose
+complex-event processing system
+\cite{cugola2012processing,agrawal2008eventstreams}.
 
 \subsection{Alert Evidence and MITRE ATT\&CK Metadata}
 \label{subsec:alert-evidence-attack}
 
-An alert is a derived detector result rather than an operational log message.
-A point alert preserves the source event that satisfied its predicates, while
-a collective alert preserves the ordered sequence accumulated by the detector.
-This evidence makes the result traceable to the runtime observations on which
-it is based and allows machine-oriented output to retain more detail than a
-compact interactive summary.
+An alert is the stable boundary between detection and the presentation path
+described in Section~\ref{subsec:event-alert-logging}. It contains the detector
+identity and severity together with the evidence that completed the match: one
+event for a point detector or the ordered event set for a collective detector.
+Before forwarding the result, the engine may suppress an equivalent alert
+repeated within a short interval. This post-detection control does not alter
+detector state, event admission, or raw-event collection.
 
-Detector definitions may associate this evidence with MITRE ATT\&CK tactics,
-techniques, data sources, and data components. The metadata is copied into the
-resulting alert, providing a shared vocabulary through which the intended
-security meaning can be communicated and organised
-\cite{strom2020attack}. The mapping is part of detector configuration rather
-than policy selection.
+MITRE ATT\&CK metadata belongs to the detector definition and crosses two
+architectural boundaries. During bootstrap, policies may use tactics and
+techniques to select a relevant subset of the detector catalogue. After a
+match, the same metadata accompanies the alert and its evidence, providing a
+shared vocabulary for interpreting and organising the observed behaviour
+\cite{strom2020attack}. This makes the classification operational rather than
+purely documentary, while leaving the event predicates and correlation logic
+explicit in the detector itself.
 
-Validation establishes that configured tactic and technique identifiers follow
-the expected syntactic form. It does not consult an authoritative ATT\&CK
-catalogue at runtime, verify the semantic correctness of the mapping, or
-demonstrate complete coverage. These limitations do not remove the value of
-the metadata: preserving the mapping alongside the evidence supports
-interpretation, traceability, and later coverage analysis. The final assessment
-of representative detector mappings belongs to Chapter~5.
+The runtime validates the expected form of tactic and technique identifiers
+but does not depend on an online ATT\&CK catalogue. Semantic review of mappings
+and evaluation of their representative coverage therefore remain part of the
+detector-authoring and experimental processes. Policy names are not currently
+attached to emitted alerts, because several policies are compiled into a shared
+execution plan rather than preserved as separate runtime branches.
 
 \section{Design Decisions and Scope Boundaries}
 \label{sec:design-decisions-boundaries}
 
-The architecture follows a series of deliberate trade-offs. Bounded
-kernel-space collection is preferred to embedding complex, verifier-sensitive
-analysis in each probe. The Go runtime owns policy and detector semantics so
-that those definitions can evolve without recompiling the kernel programs.
-Selective loading and attachment are preferred to activating every registered
-probe, and an explicit shared event contract is preferred to ad hoc payload
-interpretation.
+The architecture resolves three principal trade-offs. The first is between
+observation breadth and target reliability. Selective loading, explicit probe
+dependencies, and validation against the deployed enterprise kernel are
+preferred to assuming that every registered event can be observed portably.
+The resulting design supports the stated Rocky Linux target without claiming
+universal compatibility.
 
-Perf buffers are used because they are supported by the reference environment
-and runtime stack; BPF ring-buffer transport remains a non-implemented
-alternative. Policy scope is kept separate from detector logic, and detector
-results are kept separate from operational logging. Collective detection uses
-short, local, evidence-preserving sequences rather than persistent graphs or a
-general-purpose event-processing system.
+The second trade-off is between early reduction and analytical flexibility.
+Small, verifier-compatible filters may prevent irrelevant records from crossing
+the kernel boundary, but policy interpretation and detector semantics remain in
+Go so that they can evolve independently from eBPF compilation. The explicit
+event contract makes this division possible, while the selected perf-event
+transport reflects the capabilities validated for the reference environment.
 
-These decisions define the limits of the prototype. It does not implement
-enforcement, prevention, machine-learning anomaly discovery, user-session
-correlation, arbitrary process ancestry, cluster-wide correlation, or
-Kubernetes workload attribution. It does not claim complete Linux event or
-MITRE ATT\&CK coverage, universal kernel portability, or universal compliance
-with the performance objective.
+The third trade-off is between richer security interpretation and predictable
+runtime state. Deterministic point and bounded collective detectors provide
+more focused results than raw telemetry alone without introducing persistent
+graphs, statistical learning, or unbounded correlation. The prototype is
+therefore an observation and detection system rather than an enforcement or
+general-purpose event-processing engine. Its claims are limited to the event
+coverage, local relationships, ATT\&CK mappings, compatibility, and performance
+profiles evaluated in Chapter~5.
 
 Container packaging supports later operational use but is an implementation
 concern described in Chapter~4. A wider platform may eventually aggregate
