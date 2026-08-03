@@ -58,20 +58,72 @@ LRU maps retain process and task information across invocations. This
 arrangement gives each CPU an independent construction area while keeping the
 large 32,000-byte argument buffer outside the verifier-constrained stack.
 
-Common initialisation obtains the per-CPU workspace and global configuration,
-applies the optional effective-UID guard, resets the previous argument state,
-and records the minimum event identity. Full task-context enrichment is
-deferred until submission. A hook therefore performs only its event-specific
-reads before the submission helper refreshes the context, calculates the exact
-record length and writes the event to the perf-event array. Events rejected by
-the UID guard therefore return before full enrichment and transport.
+Common initialisation obtains the per-CPU workspace and global configuration
+before event-specific collection begins. Listing~\ref{lst:ebpf-early-admission}
+shows the exact admission guard and its position in this shared path.
 
-The entry-only and paired construction models introduced in Chapter~3 share
-this framework. Paired programs retain up to seven entry arguments in a hash
-map keyed by logical event ID and thread ID. The corresponding exit or return
-program loads and removes that state, appends the result and submits one
-logical event. Including the event ID prevents temporary state for different
-logical operations on the same thread from colliding.
+\begin{lstlisting}[
+    language=C,
+    caption={Early UID admission in common eBPF initialisation (abridged).},
+    label={lst:ebpf-early-admission}
+]
+statfunc bool should_drop_by_kernel_uid_filter(config_entry_t *config)
+{
+    if (config == NULL)
+        return false;
+    if (config->kernel_uid_filter_enabled == 0)
+        return false;
+    u32 current_uid = (u32) bpf_get_current_uid_gid();
+    return current_uid != config->kernel_uid_filter;
+}
+// Inside init_program_data, before enrichment:
+p->config = bpf_map_lookup_elem(&config_map, &zero);
+if (unlikely(p->config == NULL))
+    return 0;
+if (should_drop_by_kernel_uid_filter(p->config))
+    return 0;
+\end{lstlisting}
+
+Placing the comparison in common initialisation makes the configured UID rule
+common to every hook using this framework. An admitted hook then records its
+event-specific values; full task-context enrichment remains deferred to the
+submission helper. A mismatch therefore returns before enrichment and perf
+transport without turning the guard into a general kernel policy language.
+
+The paired construction model requires state to survive between two hook
+invocations. Listing~\ref{lst:ebpf-entry-state} shows how the logical event ID
+and current thread ID form the map key used by both sides.
+
+\begin{lstlisting}[
+    language=C,
+    caption={Per-thread state retained between entry and return hooks (abridged).},
+    label={lst:ebpf-entry-state}
+]
+statfunc u64 get_args_id(u32 event_id) {
+    return ((u64) event_id << 32) | (u32) bpf_get_current_pid_tgid();
+}
+statfunc int save_args(args_t *args, u32 event_id)
+{
+    u64 args_id = get_args_id(event_id);
+    bpf_map_update_elem(&args_map, &args_id, args, BPF_ANY);
+    return 0;
+}
+statfunc int load_args(args_t *args, u32 event_id)
+{
+    u64 args_id = get_args_id(event_id);
+    args_t *saved_args = bpf_map_lookup_elem(&args_map, &args_id);
+    if (!saved_args)
+        return -1;
+    // Seven fixed argument-slot copies are omitted.
+    return 0;
+}
+\end{lstlisting}
+
+The event component prevents two paired logical operations on the same thread
+from sharing one slot. Entry updates use replacement semantics so stale state
+does not block a later observation. On return, the fixed seven-slot copy keeps
+the verifier-visible access pattern bounded; the exit path removes the map
+entry after retrieval and appends the operation result before submission.
 
 \subsection{Process Lifecycle and Execution Hooks}
 \label{subsec:implementation-process-hooks}
@@ -191,8 +243,34 @@ The probe registry converts that set into program specifications containing the
 compiled program name, physical hook, attachment kind and implied internal
 dependencies. Public producers correspond to selectable decoder events,
 whereas internal specifications supply state or enrichment without appearing
-in event listing. Dependency expansion therefore supports both multi-program
-logical events and public events that require hidden support probes.
+in event listing. Listing~\ref{lst:probe-dependency-expansion} shows the
+selection loop that admits direct producers and dependencies implied by the
+selected public events.
+
+\begin{lstlisting}[
+    caption={Go expansion from selected logical events to producer and support probes.},
+    label={lst:probe-dependency-expansion}
+]
+selectedProbes := make([]Spec, 0, len(supportedProbes))
+for _, probe := range supportedProbes {
+    if _, ok := selectedEvents[probe.eventName]; ok {
+        selectedProbes = append(selectedProbes, probe)
+        continue
+    }
+    for _, trigger := range probe.impliedBy {
+        if _, ok := selectedEvents[trigger]; ok {
+            selectedProbes = append(selectedProbes, probe)
+            break
+        }
+    }
+}
+\end{lstlisting}
+
+This expansion makes attachment planning depend on the registry rather than
+on naming conventions in the loader. One logical event may retain several
+producer programs, while an internal program is added only when one of its
+declared triggers is selected. The resulting program set is then used to
+disable autoload for unrelated registered sections before object loading.
 
 Before libbpf loads the object, autoload is disabled for registered programs
 outside the resolved selection. Verification and relocation are consequently
@@ -228,13 +306,37 @@ The index selects the name and type from the user-space schema, allowing
 arguments that could not be captured to be omitted without changing the
 identity of later arguments.
 
-The kernel save helpers track both the next buffer offset and the offset of
-each argument. Every variable write checks the available capacity before
-copying. This explicit check is necessary because 32,000 is not a power of
-two. An earlier implementation masked offsets with the buffer size minus one;
-for longer records this folded valid positions onto earlier bytes. The current
-implementation preserves the checked offset and exposes its upper bound to the
-older verifier without altering its value.
+The argument writer must expose an upper bound to the verifier without changing
+a valid offset. Listing~\ref{lst:argument-buffer-bounds} presents the relevant
+part of the write path.
+
+\begin{lstlisting}[
+    language=C,
+    caption={Checked argument-buffer offset handling (abridged).},
+    label={lst:argument-buffer-bounds}
+]
+if (size == 0 || size > MAX_ELEMENT_SIZE || buf->offset >= ARGS_BUF_SIZE)
+    return 0;
+u32 offset = buf->offset;
+update_min(offset, ARGS_BUF_SIZE - 1);
+u32 buffer_index_offset = offset + 1;
+if (buffer_index_offset > ARGS_BUF_SIZE)
+    return 0;
+buf->args[offset] = index;
+// The omitted block clamps size for the older verifier.
+u32 buffer_arg_offset = buffer_index_offset + size;
+if (buffer_arg_offset > ARGS_BUF_SIZE)
+    return 0;
+if (bpf_probe_read(&buf->args[buffer_index_offset], size, ptr) < 0)
+    return 0;
+buf->offset = buffer_arg_offset;
+\end{lstlisting}
+
+The 32,000-byte capacity is not a power of two, so masking an offset with the
+capacity minus one would fold valid positions onto earlier bytes. The helper
+instead checks the original value and communicates its upper bound through
+\texttt{update\_min}. The final offset is committed only after the complete
+write succeeds, preserving the indexed stream consumed by the Go decoder.
 
 At submission, the common helper enriches the task context, optionally records
 a user-space stack identifier, computes the fixed and variable portions of the
@@ -370,11 +472,40 @@ argument and applies equality, inequality, containment, membership, prefix,
 suffix, existence or numeric comparison. All global conditions must hold.
 
 A stateful definition with more than one compiled step allocates partial-match
-state. An event may create that state, advance the next expected step or
-complete the sequence; each advancing event is retained in arrival order as
-alert evidence. All other matching definitions emit directly. In particular,
-a non-stateful definition with several steps treats them as alternative
-event-specific condition sets rather than as a temporal sequence.
+state. Listing~\ref{lst:collective-state-advance} shows the transition applied
+when an event is correlated with an existing sequence.
+
+\begin{lstlisting}[
+    caption={Go state transition for a collective detector sequence (abridged).},
+    label={lst:collective-state-advance}
+]
+state, ok := d.state[key]
+if !ok {
+    continue
+}
+// The expired-state check is omitted.
+matches, err := stepMatches(event, d.steps[state.nextStep])
+if err != nil {
+    return nil, err
+}
+if matches {
+    state.events = append(state.events, event)
+    state.nextStep++
+    if state.nextStep >= len(d.steps) {
+        delete(d.state, key)
+        return []detectors.Alert{d.newAlertFromEvents(state.events)}, nil
+    }
+    d.state[key] = state
+    return nil, nil
+}
+\end{lstlisting}
+
+The state records only the next expected step and the ordered evidence already
+matched. Completion removes the partial sequence before constructing the alert;
+otherwise the advanced state replaces its previous map value. New sequences
+are created separately when an event satisfies the first step. Non-stateful
+definitions allocate none of this state and treat multiple steps as alternative
+event-specific condition sets.
 
 \subsection{Local Correlation Strategies and Deduplication}
 \label{subsec:implementation-correlation-deduplication}
