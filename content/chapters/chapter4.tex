@@ -12,150 +12,169 @@ reserved for Chapter~5.
 \section{Build Toolchain and Project Organisation}
 \label{sec:implementation-build-organisation}
 
-The build produces three dependent artefacts. 
+The build process consists of three ordered stages. First, the libbpf source in
+\path{3rdparty/libbpfgo/libbpf/src} is compiled locally into the static library
+\path{dist/libbpf/obj/libbpf.a}, together with the required headers and package
+metadata. Second, Clang compiles the eBPF source into
+\path{dist/project.bpf.o} for the x86-64 target. Finally, the Go application is
+built through CGO using the local libbpf library and libbpfgo bindings, producing
+the executable \path{dist/project}. The Makefile preserves this order and
+ensures that all stages use the dependencies included in the repository rather
+than system-installed versions.
 
-First, the checked-out libbpf source is compiled as a local static archive 
-together with its headers and package metadata. Second, Clang compiles the 
-eBPF translation unit and its shared headers into an object with x86-64 target 
-definitions. Finally, the Go command is built through CGO against the local 
-libbpf archive and the local libbpfgo bindings. The aggregate build target 
-preserves this order so that neither the eBPF compiler nor the Go linker 
-can silently use a different system copy of the kernel-facing library.
-
-The generated eBPF object is an input to the Go build. A Go embedding directive
-places the object in the executable, so the object must exist before the Go
-package is compiled. The normal runtime path can consequently open the embedded
-bytes without requiring a separate object file beside the executable. An
-external object may still override the embedded asset for development and
-compatibility investigation, but this does not make the executable independent
-of the host: loading still depends on the target kernel, its BTF information,
-the required privileges and the runtime libraries required by the CGO-linked
-dependency chain.
-
-The source organisation follows the same ownership boundaries as the runtime.
-The C and eBPF sources contain collection programs and their shared
-serialisation helpers. The Go eBPF packages own loading, attachment and the
-record-consumption loop. Separate packages define the event registry, decoder,
-configuration, policy and detector models, output adapters and structured
-logging. This separation is reflected in the build graph without turning the
-repository layout into a runtime dependency: communication between components
-occurs through the event and detector contracts described below.
+The eBPF object is also embedded in the Go executable. For this reason,
+\path{dist/project.bpf.o} must be generated before the Go build starts. At
+runtime, the application can load the embedded object without requiring a
+separate copy beside the executable. Developers may still provide an external
+object through the command-line configuration for testing or compatibility
+analysis. The executable nevertheless remains dependent on the host kernel,
+its BTF data, the required privileges and the system libraries used by CGO.
 
 \section{eBPF Program Implementation}
 \label{sec:implementation-ebpf-programs}
 
-The object contains programs attached to several physical hook types, but their
-records are built through two recurring forms. A direct producer constructs and
-submits an event in one invocation. A paired producer retains request data at
-entry and completes the same logical event when a return hook exposes the
-result. These forms are independent of the public logical-event name: several
-physical programs can converge on one schema, and an attached support program
-need not expose a public event. Section~\ref{sec:implementation-loader-registry}
-describes how that mapping becomes an attachment plan.
+The eBPF object contains programs attached to different kernel hook types. Most
+of these programs produce records in one of two ways. A direct producer creates
+and submits an event during a single hook invocation. A paired producer saves
+the request arguments when an operation begins and completes the event when a
+return hook provides its result.
+
+Physical hooks and public events do not have a one-to-one relationship. Several
+eBPF programs may contribute to the same logical event and use the same event
+schema. Conversely, some attached programs only provide internal support and
+do not generate a public event. Section~\ref{sec:implementation-loader-registry}
+explains how the loader translates these relationships into an attachment plan.
+
 
 \subsection{Shared Event-Construction Framework}
 \label{subsec:implementation-shared-event-construction}
 
-Both construction forms use a single-entry per-CPU event workspace rather than
-placing the large record on the eBPF stack. Additional per-CPU scratch maps
-support path and intermediate-object handling, while bounded task and process
-maps retain reusable context. The common initialiser resets the indexed
-argument buffer and establishes only the identity and timing data required
-during collection. Event-specific programs then append their evidence, and the
-submission helper refreshes the complete task context immediately before the
-record crosses the boundary described in
+Both construction forms use a per-CPU workspace to build events. Each CPU has
+its own reusable record, avoiding the need to place the complete event structure
+on the limited eBPF stack. Additional per-CPU maps provide temporary storage
+for path reconstruction and intermediate kernel objects, while task and process
+maps retain context that can be reused across hook invocations.
+
+The common initialisation helper clears the argument buffer and records the
+basic identity and timing information. Each hook then appends its
+event-specific fields. Immediately before submission, the common submission
+helper updates the complete task context and sends the record through the
+kernel-to-user-space interface described in
 Section~\ref{sec:implementation-binary-contract}.
 
-Listing~\ref{lst:ebpf-shared-construction} combines the relevant boundaries of
-the two source helpers. Intermediate process-map setup and optional stack
-capture are omitted because they do not alter the construction contract.
-
-\begin{lstlisting}[
-    language=C,
-    caption={Common event initialisation and submission boundaries (abridged from two helpers).},
-    label={lst:ebpf-shared-construction}
-]
-if (p->event == NULL) {
-    p->event = bpf_map_lookup_elem(&event_data_map, &zero);
-    if (unlikely(p->event == NULL))
-        return 0;
-}
-p->config = bpf_map_lookup_elem(&config_map, &zero);
-if (unlikely(p->config == NULL))
-    return 0;
-// ... UID admission and task/process map setup are omitted.
-reset_event_args_buf(p->event);
-p->event->task = (struct task_struct *) bpf_get_current_task();
-u64 id = bpf_get_current_pid_tgid();
-p->event->context.task.host_tid = id;
-p->event->context.task.host_pid = id >> 32;
-p->event->context.eventid = event_id;
-init_task_context(&p->event->context.task, p->event->task, p->config->options);
-u32 size = sizeof(event_context_t) + sizeof(u8) + p->event->args_buf.offset;
-long perf_ret = bpf_perf_event_output(p->ctx, &events, BPF_F_CURRENT_CPU, p->event, size);
-update_event_stats(p->event->context.eventid, perf_ret);
-return perf_ret;
-\end{lstlisting}
-
-The per-CPU workspace is reused rather than queued as mutable state; ownership
-ends when the helper copies the populated prefix into the perf-event channel.
-Failure to obtain the workspace, configuration, task state or process state
-causes that invocation to return without a record. The actual implementation
-also clamps the submitted size in verifier-visible form and updates optional
-delivery counters. The abbreviated final call therefore shows the transport
-boundary, while Section~\ref{sec:implementation-binary-contract} owns its exact
-bounds and failure semantics.
-
-Paired producers require a different kind of ownership. Entry arguments are
-stored in a hash map under the logical event identifier and current host thread
-identifier. Listing~\ref{lst:ebpf-entry-state} shows the source key, replacement
-update and return-side lookup; fixed slot copies and deletion are deliberately
-left to the surrounding contract.
+Listing~\ref{lst:ebpf-shared-construction} shows the main stages shared by these
+helpers. Details related to process-map initialisation and optional stack
+capture are omitted because they do not change the event-construction process.
 
 \newpage
 
 \begin{lstlisting}[
-    language=C,
-    caption={Per-thread entry state used by paired producers (abridged).},
-    label={lst:ebpf-entry-state}
-]
-statfunc u64 get_args_id(u32 event_id)
-{
-    return ((u64) event_id << 32) | (u32) bpf_get_current_pid_tgid();
-}
-statfunc int save_args(args_t *args, u32 event_id)
-{
-    u64 args_id = get_args_id(event_id);
-    bpf_map_update_elem(&args_map, &args_id, args, BPF_ANY);
-    return 0;
-}
-statfunc int load_args(args_t *args, u32 event_id)
-{
-    u64 args_id = get_args_id(event_id);
-    args_t *saved_args = bpf_map_lookup_elem(&args_map, &args_id);
-    if (!saved_args)
-        return -1; // missed entry or not a container
-    // ... seven fixed argument-slot copies are omitted.
-    return 0;
-}
+      language=C,
+      basicstyle=\ttfamily\footnotesize,
+      caption={Shared event construction and submission path.},
+      label={lst:ebpf-shared-construction}
+  ]
+  if (!p->event)
+      p->event = bpf_map_lookup_elem(&event_data_map, &zero);
+  if (!p->event)
+      return 0;
+
+  p->config = bpf_map_lookup_elem(&config_map, &zero);
+  if (!p->config)
+      return 0;
+
+  reset_event_args_buf(p->event);
+  p->event->task = (struct task_struct *) bpf_get_current_task();
+
+  u64 id = bpf_get_current_pid_tgid();
+  p->event->context.task.host_tid = id;
+  p->event->context.task.host_pid = id >> 32;
+  p->event->context.eventid = event_id;
+
+  init_task_context(&p->event->context.task,
+                    p->event->task, p->config->options);
+
+  u32 size = sizeof(event_context_t) + sizeof(u8) +
+             p->event->args_buf.offset;
+  long ret = bpf_perf_event_output(
+      p->ctx, &events, BPF_F_CURRENT_CPU, p->event, size);
+
+  update_event_stats(p->event->context.eventid, ret);
+  return ret;
+  \end{lstlisting}
+
+The per-CPU workspace is reused after each event submission. When the
+submission helper is called, the completed portion of the record is copied to
+the perf-event channel, so later modifications to the workspace do not affect
+the submitted event. If the program cannot obtain the required workspace,
+configuration or task context, it stops processing that invocation without
+producing a record.
+
+The complete implementation also verifies the record size before submission
+and optionally updates delivery statistics. The listing therefore focuses on
+the point at which the event leaves kernel space. The precise size checks and
+error-handling rules are described in
+  Section~\ref{sec:implementation-binary-contract}.
+
+Paired producers build one event across two hook invocations. The entry program
+stores the request arguments in a shared map, while the return program retrieves
+them and adds the operation result. Each map entry is identified by the logical
+event and the host thread that issued the request. This allows the return hook
+to recover the correct arguments without mixing different operations performed
+by the same thread.
+
+\begin{lstlisting}[
+      language=C,
+      basicstyle=\ttfamily\footnotesize,
+      caption={Saving and recovering arguments for paired producers.},
+      label={lst:ebpf-entry-state}
+  ]
+  statfunc u64 get_args_id(u32 event_id)
+  {
+      return ((u64) event_id << 32) |
+             (u32) bpf_get_current_pid_tgid();
+  }
+
+  statfunc int save_args(args_t *args, u32 event_id)
+  {
+      u64 key = get_args_id(event_id);
+      bpf_map_update_elem(&args_map, &key, args, BPF_ANY);
+      return 0;
+  }
+
+  statfunc int load_args(args_t *args, u32 event_id)
+  {
+      u64 key = get_args_id(event_id);
+      args_t *saved = bpf_map_lookup_elem(&args_map, &key);
+      if (!saved)
+          return -1;
+
+      /* Fixed argument-slot copies are omitted. */
+      return 0;
+  }
 \end{lstlisting}
 
-Including the event identifier prevents different paired operations on one
-thread from sharing a slot. The seven machine-word fields in \texttt{args\_t}
-are copied explicitly so that every access remains statically bounded. A
-missing entry suppresses the return-side event; a successful lookup is deleted
-before the result is appended. Replacement with \texttt{BPF\_ANY} prevents
-stale state from blocking a later entry, but it also means that this map is a
-short construction aid rather than a history of process activity.
+Including the event identifier in the key prevents different paired operations
+from using the same map entry. The implementation copies the seven argument
+slots explicitly, keeping every memory access statically bounded for the eBPF
+verifier. If no entry is found, the return program cannot reconstruct the
+event and therefore produces no record.
 
-The following subsections apply these direct and paired construction patterns
-to different hook families. The meaning of an event, however, depends on the
-stage at which it is observed. A syscall-entry event records an operation
-requested by a process, while a security mediation hook reports that the
-kernel is evaluating that operation. A committed-state hook observes a change
-after it has been installed, and a lifecycle tracepoint confirms that a kernel
-transition has occurred. Finally, an exit or return hook provides the result
-available at that boundary, such as a return value or an error code.
+After the saved arguments have been copied, the return program removes the map
+entry and appends the operation result. New entry data is stored with
+\texttt{BPF\_ANY}, allowing it to replace stale state left by a missing return
+hook. The map is therefore temporary correlation storage, not a history of
+process activity.
+
+The following subsections apply these two construction patterns to different
+hook families. The interpretation of each event depends on where the hook is
+placed within the kernel operation. A syscall-entry hook records the operation
+requested by a process, but not its outcome. A security hook observes the
+operation while it is being checked by the kernel, without necessarily
+revealing the final decision. A committed-state hook runs after a new state has
+been installed, while a lifecycle tracepoint reports that a process transition
+has occurred. An exit or return hook completes the observation by recording the
+result available at that boundary, such as a returned value or error code.
 
 \subsection{Process Lifecycle and Executable Transitions}
 \label{subsec:implementation-process-execution-hooks}

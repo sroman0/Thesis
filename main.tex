@@ -16,6 +16,51 @@
 
 \input{common/font_config.tex}
 
+% Colors for source-code listings
+\definecolor{listingbackground}{RGB}{247,247,242}
+\definecolor{listingcomment}{RGB}{0,160,0}
+\definecolor{listingnumbers}{RGB}{150,150,150}
+
+\lstdefinestyle{thesis-c}{
+    language=C,
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{black}\bfseries,
+    commentstyle=\color{listingcomment},
+    stringstyle=\color{black},
+    identifierstyle=\color{black},
+%
+    backgroundcolor=\color{listingbackground},
+%
+    numbers=left,
+    numberstyle=\ttfamily\tiny\color{listingnumbers},
+    numbersep=9pt,
+    stepnumber=1,
+    numberblanklines=true,
+%
+    frame=none,
+    xleftmargin=2.2em,
+    xrightmargin=0.5em,
+%
+    breaklines=true,
+    breakatwhitespace=false,
+    breakindent=1.5em,
+    postbreak=\mbox{\textcolor{listingnumbers}{$\hookrightarrow$}\space},
+%
+    columns=fullflexible,
+    keepspaces=true,
+    tabsize=4,
+%
+    showstringspaces=false,
+    showspaces=false,
+    showtabs=false,
+%
+    captionpos=b,
+    aboveskip=1em,
+    belowskip=1em
+}
+
+\lstset{style=thesis-c}
+
 % If using biblatex, this is correct. If using bibtex, place inside packages or main.
 \addbibresource{bibliography.bib}
 
