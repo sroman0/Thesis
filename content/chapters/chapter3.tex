@@ -15,9 +15,10 @@ evolve without increasing verifier-sensitive kernel logic. An explicit event
 contract connects the two domains. Once an observation crosses this boundary,
 policies determine whether it belongs to the monitored scope, while
 independently configured detectors evaluate individual events or short ordered
-sequences. These choices are presented here at the architectural level, leaving
-their concrete implementation to Chapter 4 and their experimental assessment
-to Chapter 5.
+sequences. These choices are presented here at the architectural level. Their
+kernel-space implementation is developed in Chapter~4, the user-space runtime
+and detection implementation in Chapter~5, and their experimental assessment
+in Chapter~6.
 
 \section{Design Goals and Constraints}
 \label{sec:design-goals-constraints}
@@ -198,7 +199,7 @@ pipeline must operate.
 NFR-07 defines an evaluation objective rather than an unconditional performance
 guarantee. Its assessment therefore depends on the monitored workload, enabled
 events, selected detectors, output configuration, and measurement method.
-Chapter~5 defines the representative profiles and procedures used for this
+Chapter~6 defines the representative profiles and procedures used for this
 evaluation.
 
 \section{System Architecture}
@@ -524,8 +525,9 @@ components.
 The probe registry does not define the binary schema, but it must remain
 consistent with the same logical interface. Every probe that produces a public
 event must refer to an event identifier for which the user-space registry
-provides a valid decoding contract. The implementation mechanisms that realise 
-and preserve these relationships are discussed in Chapter~4.
+provides a valid decoding contract. Chapter~4 describes the producer and wire
+contract, while Chapter~5 explains the probe and event registries that preserve
+these relationships in user space.
 
 \subsection{Perf-Buffer Transport and Failure Boundaries}
 \label{subsec:perf-buffer-failure-boundaries}
@@ -573,7 +575,7 @@ The per-CPU organisation also limits ordering guarantees. Collective
 detectors evaluate sequences according to the order in which records reach the
 user-space engine, since the architecture does not reconstruct a total causal
 order across CPUs. The effects of transport pressure, loss, and concurrent
-delivery are assessed in Chapter~5.
+delivery are assessed in Chapter~6.
 
 \section{User-Space Runtime Design}
 \label{sec:user-space-runtime-design}
@@ -866,11 +868,11 @@ graphs, statistical learning, or unbounded correlation. The prototype is
 therefore an observation and detection system rather than an enforcement or
 general-purpose event-processing engine. Its claims are limited to the event
 coverage, local relationships, ATT\&CK mappings, compatibility, and performance
-profiles evaluated in Chapter~5.
+profiles evaluated in Chapter~6.
 
-Container packaging supports later operational use but is an implementation
-concern described in Chapter~4. A wider platform may eventually aggregate
-alerts from several monitored hosts and add deployment context, but that
+Container packaging supports later operational use but is a user-space and
+deployment concern described in Chapter~5. A wider platform may eventually
+aggregate alerts from several monitored hosts and add deployment context, but that
 external capability is neither implemented nor evaluated as part of this
 thesis. Within its stated boundary, the proposed system provides a coherent
 path from selected kernel observations to normalised telemetry and
