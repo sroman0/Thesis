@@ -756,6 +756,13 @@ admission boundary.
 \subsection{Point and Collective Detectors}
 \label{subsec:point-collective-detectors}
 
+The terms \emph{point} and \emph{collective} describe how much event evidence a
+detector requires. They do not denote learned anomaly models in this system. A
+point detector evaluates one observation, whereas a collective detector
+evaluates whether several observations satisfy an explicitly configured local
+sequence. Both forms are deterministic and rule based; neither learns a
+baseline or assigns a statistical anomaly score.
+
 The selected detector definitions are compiled into a runtime registry. This
 registry owns a deterministic set of detector instances, while a separate
 dispatch index maps each event type to the detectors that consume it. The

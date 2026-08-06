@@ -1,4 +1,4 @@
-\chapter{Background and eBPF architecture}
+\chapter{Background and eBPF Architecture}
 \label{ch:background-related-work}
 
 \section{Linux Kernel Observability}
@@ -168,7 +168,7 @@ or submit an event to user space. Consequently, ``tracepoint'', ``kprobe'',
 ``LSM hook'', and ``eBPF program'' describe different parts of the same
 monitoring path \cite{linux2024ebpfuserspaceapi,linux_libbpf_program_types}.
 
-These mechanisms are complementary. System-call describe requests
+These mechanisms are complementary. System-call observations describe requests
 and results at the user--kernel boundary; general tracepoints expose
 kernel-defined events; kprobes and kretprobes provide dynamic access to
 function entry and return; and LSM-related hooks expose security mediation
@@ -274,6 +274,48 @@ verifier and, if accepted, translated into native machine code and executed
 whenever its associated hook or execution context is invoked
 \cite{gbadamosi2024ebpf}.
 
+\subsection{Object Files, Loading and Attachment Lifecycle}
+\label{subsec:ebpf-object-loading-attachment}
+
+The source code of an eBPF application is not passed directly to the kernel.
+Clang first compiles it into BPF instructions stored in an \gls{elf} object.
+The object groups programs into named sections and also carries map
+declarations, licence information, symbols, BTF metadata and relocation
+records. Section names help a loader infer the program type and expected
+attachment family, while BTF and relocation information describe references
+that must be adapted before the program can be accepted by the target kernel
+\cite{linux_libbpf_program_types,linux_btf,linux_bpf_llvm_relocations}.
+
+A user-space loader, commonly built on \texttt{libbpf}, opens this object and
+turns its declarations into kernel objects. It creates or reuses the required
+maps, resolves relocations and submits each enabled program through the BPF
+system-call interface. The kernel then applies the verifier to every submitted
+program. Loading is therefore an active compatibility boundary: a syntactically
+valid object may still fail because a required program type, helper, kernel
+symbol or verifier behaviour is unavailable on the host
+\cite{linux_bpf_syscall,linux_libbpf_overview,linux2026ebpfverifier}.
+
+Loading and attachment are separate operations. A successfully loaded program
+exists as a kernel object referenced from user space, but it does not run until
+it is connected to a compatible hook. Depending on the program and hook type,
+this connection may be represented by a BPF link or by tracing-specific
+infrastructure such as a perf event. The attachment owns the relationship
+between the program and its trigger and can be removed independently from the
+program itself. This separation allows one object file to contain several
+programs, only a subset of which may be loaded and attached for a particular
+monitoring configuration
+\cite{linux_libbpf_program_types,linux_libbpf_overview}.
+
+File descriptors provide the user-space references through which programs,
+maps and links are configured and eventually released. Closing the final
+reference normally permits the corresponding kernel object to be destroyed,
+whereas pinning can give an object a persistent name in the BPF filesystem and
+allow it to outlive the process that created it. Runtime ownership and cleanup
+are consequently part of the operational model, not merely loader
+housekeeping: stale attachments or pinned objects may continue consuming
+kernel resources after the original control path has ended
+\cite{linux_bpf_syscall,linux_libbpf_overview}.
+
 \subsection{Hook Selection and Event Semantics}
 \label{subsec:ebpf-hook-selection-event-semantics}
 
@@ -346,6 +388,26 @@ state outside the constrained BPF stack, maps extend the information that a
 program can retain between executions. Accesses performed by eBPF code remain
 subject to verifier validation and to the rules imposed by the selected map
 type \cite{linux_bpf_maps,linux_bpf_syscall}.
+
+Different map organisations serve different ownership patterns. Array maps
+provide fixed indexed storage and are suitable for configuration or bounded
+workspaces. Hash maps associate dynamically selected keys with values and can
+retain state such as entry arguments until a later hook completes an
+operation. Per-CPU variants allocate an independent value for each processor,
+reducing contention when programs update temporary state or counters on a hot
+path. Their values must, however, be combined explicitly when user space needs
+a system-wide result. Shared maps instead require the application to consider
+concurrent access from several CPUs and the atomicity of each update
+\cite{linux_bpf_maps}.
+
+Maps also form a control channel in the opposite direction. User space can
+populate configuration, selection or lookup data before monitoring begins and
+update supported values while programs are loaded. An eBPF program can then
+consult that state without embedding every operational choice in its
+instructions. This division is central to configurable monitoring: the kernel
+program remains bounded, while user space controls which state it exposes and
+how map contents are interpreted
+\cite{linux_bpf_maps,linux_bpf_syscall}.
 
 Helpers are kernel-provided functions that extend what an eBPF program can do
 without granting unrestricted access to kernel internals. They expose selected
@@ -459,141 +521,7 @@ features may make the effective kernel capabilities differ from those suggested
 by the upstream version number alone
 \cite{linux_bpf_design_qa,redhat2025backporting}.
 
-\section{Runtime Security and Anomaly Detection}
-\label{sec:runtime-security-anomaly-detection}
-
-Kernel telemetry becomes useful for runtime security only when observed
-operations are interpreted in relation to a security condition. Detection
-systems can assign this meaning in different ways. Signature-based detection
-matches observed activity against predefined patterns, whereas anomaly-based
-detection identifies deviations from an expected model of behaviour
-\cite{scarfone2007idps,chandola2009anomaly}.
-
-The detector layer developed in this thesis follows a deterministic,
-rule-based approach. It evaluates explicit conditions over individual events
-or short ordered event sequences and does not learn a behavioural baseline or
-calculate statistical anomaly scores. The point and collective
-taxonomy introduced below is therefore used to describe the structure of the
-observations involved in a detection, rather than the algorithm through which
-the system discovers anomalous behaviour.
-
-\subsection{Point, Contextual and Collective Anomalies}
-\label{subsec:point-contextual-collective-anomalies}
-
-Chandola, Banerjee, and Kumar distinguish point, contextual, and collective
-anomalies. A point anomaly is an individual observation that is anomalous with
-respect to the remaining data. A contextual anomaly is anomalous only under
-particular contextual attributes, such as time or location. A collective
-anomaly is a related group of observations whose joint behaviour is anomalous,
-even when the individual observations may not be unusual
-\cite{chandola2009anomaly}.
-
-\begin{figure}[H]
-    \centering
-
-    \includegraphics[
-        width=0.90\textwidth,
-        height=0.75\textheight,
-        keepaspectratio
-    ]{figures/chapter2/types_of_anomaly.jpg}
-
-    \caption[Anomaly Detection: Type of Anomalies]
-    {Anomaly Detection, Type of Anomalies.\cite{einar2021anomalypredictions}}
-
-    \label{fig:anomaly-types}
-\end{figure}
-
-This taxonomy is useful for kernel telemetry. A single operation can be
-security-relevant when its own attributes satisfy a sufficiently precise rule.
-Other behaviours are better represented as an ordered group, for example a
-credential transition followed shortly by execution or access to a sensitive
-resource. Event-stream research formalises related ideas through ordered
-patterns, selection strategies, and bounded temporal constraints
-\cite{cugola2012processing,agrawal2008eventstreams}.
-
-Contextual detection depends on understanding the circumstances in which an
-event occurs. A monitor running on a single host can interpret an observation
-using the process information available at that moment, but its view remains
-limited to the local system. It cannot reliably determine whether the same
-behaviour is unusual across a wider deployment or inconsistent with
-organisational expectations that are not visible to the agent. For this
-reason, the tool developed in this work focuses on deterministic detections
-over individual events and short, locally correlated sequences. It does not
-attempt to provide contextual anomaly detection or general-purpose complex
-event processing.
-
-\subsection{Policies, Detectors and Alert Generation}
-\label{subsec:policies-detectors-alerts}
-
-Kernel telemetry becomes useful for security analysis only after the collected
-observations have been placed within a defined monitoring context and evaluated
-against explicit conditions. The tool developed in this work follows this
-principle by separating the selection of relevant activity from its security
-interpretation. Policies define the monitoring scope by selecting the events
-and process contexts admitted to the analysis pipeline, while detectors operate
-on the resulting normalised stream and evaluate explicit security conditions.
-Keeping these responsibilities separate allows the monitoring scope and the
-detection logic to evolve independently, without moving higher-level analysis
-into the eBPF programs. Comparable separations between event selection and rule
-evaluation appear in established runtime security systems
-\cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
-falcosecurity_falco_rules}.
-
-A single-event detector evaluates one observation and emits an alert when its
-predicates match. A collective detector instead retains the evidence needed to
-determine whether later observations complete a predefined ordered pattern.
-Each collective detector defines the local relationship that must hold among
-the events involved. This allows a pattern to remain associated even when its
-events originate from different processes, provided that they share the
-identity required by the detector. A partial match is retained only for a
-bounded interval and is discarded if the sequence is not completed within that
-time. These constraints reduce accidental associations between unrelated
-observations, although a completed pattern does not by itself prove malicious
-intent
-\cite{cugola2012processing,agrawal2008eventstreams}.
-
-An alert is a higher-level result derived from one or more source events. It
-should identify the detector that matched and preserve sufficient evidence to
-explain why its condition was satisfied. When the detection concerns a
-collective pattern, the alert also retains the ordered sequence of observations
-that completed it. Keeping alerts distinct from raw telemetry allows the two
-outputs to be retained and routed independently according to operational needs
-\cite{scarfone2007idps,falcosecurity_falco_outputs}.
-
-\subsection{MITRE ATT\&CK as a Classification Framework}
-\label{subsec:mitre-attack-classification}
-
-The alerts described in the previous subsection preserve the observations that
-caused a detector to match. However, the meaning of those observations may
-remain closely tied to the terminology of the local rule that produced the
-alert. Relating the result to a shared security vocabulary makes it easier to
-interpret the detected behaviour and communicate it beyond the monitoring
-tool itself.
-
-\gls{attack} provides such a vocabulary by organising observed adversary
-behaviour into tactics and techniques. Tactics represent the objectives pursued
-by an adversary, while techniques describe how those objectives may be
-achieved. This structure allows detections and security reports produced by
-different systems to refer to recognised behavioural categories
-\cite{strom2020attack,mitre2026attackresources}.
-
-The tool developed in this work associates ATT\&CK metadata with detector
-definitions and propagates it to the resulting alerts. This connects the
-low-level runtime evidence preserved by an alert with a broader description of
-its possible security relevance. Stable ATT\&CK identifiers also allow alerts
-to be interpreted and organised consistently by analysts or downstream
-systems. The mapping is therefore treated as part of the semantic description
-of a detector rather than as an additional presentation field
-\cite{strom2020attack,mitre2026attackresources}.
-
-\gls{attack} remains a classification framework: the same technique may appear through different runtime behaviours,
-while a single observation may support more than one interpretation. A mapping
-must consequently be reviewed against the specific behaviour represented by
-the detector. Associating an alert with a technique does not by itself validate
-the detector or demonstrate complete coverage of that technique
-\cite{strom2020attack,mitre2026attackfaq}.
-
-\section{Related Runtime Security Tools}
+\section{Related eBPF Runtime Security Tools}
 \label{sec:related-runtime-security-tools}
 
 Existing eBPF-based runtime security tools share the objective of interpreting
@@ -613,7 +541,8 @@ Among the systems considered in this section, Tracee is the closest reference
 for the tool developed in this work. Both systems separate kernel-level event
 collection from the analysis performed in user space. This shared structure,
 rather than a direct feature-by-feature correspondence, makes Tracee the main
-architectural reference for the proposed system. \cite{aquasecurity_tracee,aquasecurity_tracee_overview,
+architectural reference for the proposed system
+\cite{aquasecurity_tracee,aquasecurity_tracee_overview,
 her2025ebpfsecuritytools}.
 
 \subsubsection{Architecture and Event Pipeline}
@@ -959,14 +888,10 @@ system
 
 Within this environment, eBPF programs collect selected kernel observations
 and transfer them to a Go runtime through an explicit event contract. The
-resulting records are converted into a normalised event stream on which
-policies and detectors perform separate roles. Policies determine the monitored
-event domain, while configured YAML detectors evaluate deterministic
-conditions over individual observations or short ordered patterns. Correlation
-remains local and bounded, but it can associate activity across processes when
-the observations share the relationship defined by the detector. Alerts retain
-the evidence that produced the match and may carry ATT\&CK metadata to express
-its security meaning through a shared classification vocabulary.
+resulting records become a typed user-space event stream. Chapter~3 defines how
+that stream is scoped through policies and interpreted by detectors; the
+present chapter is concerned with the eBPF collection model and the prior-art
+systems against which the complete architecture is positioned.
 
 The individual mechanisms used by the prototype have clear precedents in
 existing runtime security systems. Tracee provides the closest architectural
@@ -980,7 +905,7 @@ falcosecurity_falco_rules,cilium_tetragon_tracing_policy}.
 The contribution of this thesis therefore lies in the independent integration
 of these ideas within a compact prototype tailored to the selected enterprise
 kernel. Particular attention is given to the compatibility decisions required
-by that environment, the contract through which kernel records become typed
-user-space events, and the use of bounded local state for collective detection.
-These aspects can be examined directly because both the collection and
-analysis pipeline were developed as part of the work.
+by that environment, the selection of complementary observation points and the
+contract through which kernel records become typed user-space events. The
+policy and detection architecture built on that contract is developed in
+Chapter~3 rather than repeated here.
