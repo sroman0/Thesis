@@ -39,10 +39,10 @@ The main objective of this thesis is to design, implement, and evaluate an eBPF-
 The remainder of the thesis develops this objective progressively, moving from the necessary technical foundations to the architecture, implementation, and evaluation of the proposed system:
 
 \begin{itemize}
-    \item \textbf{Chapter~2 - Background and eBPF Architecture} introduces Linux runtime instrumentation, the eBPF execution model, object loading and attachment, maps, transport, and portability. It also reviews related eBPF-based runtime-security tools.
+    \item \textbf{Chapter~2 - eBPF Architecture} introduces Linux runtime instrumentation, the eBPF execution model, object loading and attachment, maps, transport, and portability. It also reviews related eBPF-based runtime-security tools.
     \item \textbf{Chapter~3 - Requirements and System Design} defines the target environment, functional and operational requirements, architectural components, event flow, and the boundaries between kernel-space collection and user-space processing.
     \item \textbf{Chapter~4 - Kernel-Space Event Collection Implementation} describes the shared eBPF event framework, process and security hook families, binary record contract, perf-buffer transport, early filtering, and compatibility work required by the target kernel.
-    \item \textbf{Chapter~5 - User-Space Runtime and Detection Implementation} presents the Go runtime, probe registry, attachment lifecycle, decoder, event selection, policy and detector subsystems, \gls{attack} metadata, output handling, structured logging, and container packaging.
+    \item \textbf{Chapter~5 - User-Space and Detection Implementation} presents the Go runtime, probe registry, attachment lifecycle, decoder, event selection, policy and detector subsystems, \gls{attack} metadata, output handling, structured logging, and container packaging.
     \item \textbf{Chapter~6 - Experimental Evaluation} evaluates functional behaviour, event and detector operation, \gls{cpu} and memory consumption, and the effects of the implemented filtering and performance controls on the target Rocky Linux environment.
     \item \textbf{Chapter~7 - Conclusions} summarises the results, discusses the principal limitations of the prototype, and identifies possible directions for future development.
 \end{itemize}
