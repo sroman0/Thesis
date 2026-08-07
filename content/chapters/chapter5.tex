@@ -1,44 +1,77 @@
-\chapter{User-Space and Detection Implementation}
+\chapter{User-Space Runtime and Detection Implementation}
 \label{ch:user-space-implementation}
 
-This chapter follows the records produced by Chapter~4 into the Go runtime.
-It describes how configuration becomes an attachment plan, how perf-buffer
-records are decoded into typed events, and how admitted events are evaluated
-by policies and point or collective detectors. The chapter then covers alert
-presentation, operational logging and container packaging. Functional and
-performance evaluation remains the responsibility of Chapter~6.
+Chapter~4 described how the eBPF programs construct and submit binary event
+records through the perf buffer. This chapter starts at the corresponding
+user-space boundary. It explains how the Go runtime prepares the selected
+programs, interprets delivered records, admits them into the analytical path,
+evaluates configurable policies and detectors, and presents events, alerts and
+operational diagnostics. The focus is on the implemented ownership and failure
+boundaries rather than on eBPF theory, hook catalogues or experimental results.
 
 \section{Loader, Probe Registry and Attachment Lifecycle}
 \label{sec:implementation-loader-registry}
 
-Runtime construction begins after configuration and external rule documents
-have been accepted. Object resolution gives precedence to an environment
-override, then to an explicit path, and finally to the embedded object produced
-in Section~\ref{sec:implementation-build-organisation}. BTF resolution is
-independent and similarly permits an environment or configuration override
-before using \path{/sys/kernel/btf/vmlinux}.
+The runtime begins with one central configuration object populated by the
+command-line interface. Configuration normalisation enables the detector layer
+when detector paths are supplied and enables alert output for the
+\texttt{alerts-only} mode. Static validation then checks the requested output
+and logging formats before the runtime attempts to open an eBPF object or
+acquire a kernel-facing resource. The \texttt{list-events} path terminates at
+this stage: it obtains names from the probe registry and does not resolve BTF,
+open the eBPF object or attach a program.
 
-The effective logical-event set is established before the object is loaded.
-The probe registry converts that set into program specifications containing the
-compiled program name, physical hook, attachment kind and implied internal
-dependencies. Public producers correspond to selectable decoder events,
-whereas internal specifications supply state or enrichment without appearing
-in event listing. Listing~\ref{lst:probe-dependency-expansion} shows the
-selection loop that admits direct producers and dependencies implied by the
-selected public events.
+The object and BTF inputs are resolved independently. For the eBPF object, the
+runtime gives precedence to the \texttt{PROJECT\_BPF\_OBJECT} environment
+variable, then to an explicit command-line path, and finally to the object
+embedded in the executable. BTF follows the analogous
+\texttt{PROJECT\_BTF\_FILE}, command-line and default-host-path order. The
+embedded object removes the need to place a second object file beside the
+executable in the usual path, but it does not remove the target dependence on
+kernel BTF, privileges, compatible attachment points and the libraries used by
+the CGO-linked runtime. The latter uses \texttt{libbpfgo} as its Go interface to
+\texttt{libbpf} \cite{aquasecurity_libbpfgo}.
+
+Policies and detector definitions are prepared before the eBPF module is
+opened. Policy files are loaded and checked against the event registry. When
+every active non-suppressive rule contains an explicit event include set, the
+policy manager computes a finite allowlist and intersects it with the optional
+CLI selection. The resulting set can reduce the programs considered for
+loading. An open-ended policy rule cannot safely produce such an allowlist, so
+the broader user selection is retained. A disjoint exact policy and CLI scope
+is rejected during startup rather than being misinterpreted as the empty
+selection that means ``all events'' to the probe selector.
+
+Detector files are likewise parsed and validated before instances are created.
+Policies may select detector definitions by identifier or metadata, including
+severity, tags, statefulness and \gls{attack} tactic or technique identifiers.
+This is a bootstrap operation: definitions outside the selected catalogue do
+not create detector instances or retain collective state. Detector selection
+does not, however, expand the eBPF event plan. A detector whose inputs are
+outside a general CLI selection will receive no such event; policy-selected
+detectors are checked against the selecting policy's event scope.
+
+The probe registry translates the selected logical event names into physical
+programs, hooks and attachment kinds. A public logical event may require
+several producers, for example different syscall variants, while an internal
+support program may be attached only because another event requires it. The
+logical set remains the user-facing selection and admission domain; the
+physical slice controls autoload and attachment. Listing~\ref{lst:probe-plan}
+shows the dependency expansion used to build the latter.
 
 \begin{lstlisting}[
-    caption={Go expansion from selected logical events to producer and support probes.},
-    label={lst:probe-dependency-expansion}
+    language=Go,
+    caption={Physical probe-plan construction from selected logical events (abridged).},
+    label={lst:probe-plan}
 ]
 selectedProbes := make([]Spec, 0, len(supportedProbes))
 for _, probe := range supportedProbes {
-    if _, ok := selectedEvents[probe.eventName]; ok {
+    if _, ok := probeActivation[probe.eventName]; ok {
         selectedProbes = append(selectedProbes, probe)
         continue
     }
     for _, trigger := range probe.impliedBy {
-        if _, ok := selectedEvents[trigger]; ok {
+        if _, ok := probeActivation[trigger]; ok {
             selectedProbes = append(selectedProbes, probe)
             break
         }
@@ -46,169 +79,317 @@ for _, probe := range supportedProbes {
 }
 \end{lstlisting}
 
-This expansion makes attachment planning depend on the registry rather than
-on naming conventions in the loader. One logical event may retain several
-producer programs, while an internal program is added only when one of its
-declared triggers is selected. The resulting program set is then used to
-disable autoload for unrelated registered sections before object loading.
+The first branch retains a producer directly selected by its logical event. The
+second retains a support program when one of its triggering events is active.
+Consequently, internal dependencies are available to the kernel-side
+implementation without becoming CLI-visible events or independent decoder
+schemas. Cross-registry tests exercise the public event set, dependency
+expansion and the many-to-one relation between physical programs and logical
+events. They are intended to detect interface drift; they do not establish the
+availability of every attachment on a particular target kernel.
 
-Before libbpf loads the object, autoload is disabled for registered programs
-outside the resolved selection. Verification and relocation are consequently
-avoided for those registered sections. This optimisation is bounded by the
-registry: a program omitted from it cannot be disabled through this planning
-step, so registry completeness is part of the loading correctness boundary.
+Before the module is loaded, the runtime disables autoload for unselected
+programs represented in the registry. This ordering means that relocation,
+verification and loading apply only to the selected registered subset and its
+dependencies. The qualification is important: the registry controls registered
+program names; it is not an object-wide discovery mechanism for every program
+that might be present in the compiled eBPF object.
 
-After object loading, the runtime updates configuration maps, creates the perf
-reader and attaches each selected program according to its registry kind. Raw
-tracepoints, tracepoints, kprobes and kretprobes use their corresponding
-libbpfgo attachment paths. Every successful attachment is retained as an owned
-link.
+After loading, the runtime updates the singleton configuration map used by the
+optional exact effective-UID filter described in Chapter~4. It then creates one
+libbpfgo perf reader for the \texttt{events} map, with separate channels for
+records and reported losses, and attaches each selected program through the
+registry's attachment route. Raw tracepoints, typed tracepoints, kprobes,
+kretprobes and the conditionally required cgroup attachment each use an
+explicit libbpfgo operation. The runtime retains every returned link.
 
-The active loop consumes perf records until cancellation. Shutdown destroys
-links in reverse acquisition order, releases any runtime-managed cgroup mount,
-closes the perf reader and then closes the loaded module. This order preserves
-resource ownership across partial initialisation and normal shutdown.
+Resource ownership is centralised in the runtime object. A signal-derived
+context stops the event loop cooperatively, while a deferred cleanup routine
+destroys links in reverse attachment order, releases only a cgroup-v2 mount
+created by the runtime, closes the perf reader and closes the module. Setup
+and attachment failures abort initialisation. By contrast, record-local
+decoding, detector and presentation failures are reported during the active
+loop and do not terminate later event processing. Cleanup errors are joined
+with an existing runtime error and reported through the diagnostic logger. The
+current tests strongly cover selection and configuration behaviour, whereas
+object-backed tests for partial initialisation, attachment and cancellation
+remain a limitation.
 
 \section{User-Space Decoder and Event Registry}
 \label{sec:implementation-decoder-registry}
 
-The decoder consumes the binary contract defined in
-Section~\ref{sec:implementation-binary-contract}. It reads the fixed context
-in little-endian field order, obtains the argument count and resolves the
-numeric event identifier. Each argument index selects its declaration and
-payload decoder from the event registry. Decoded values are reordered
-according to that schema and returned as the typed event consumed directly by
-policies and detectors. The output adapter introduced in
-Section~\ref{sec:implementation-output-logging} is a presentation model, not a
-second security-event normalisation stage.
+The perf reader delivers byte slices rather than self-describing event objects.
+The decoder is therefore the normalisation boundary for host events. It reads
+the fixed 136-byte common context using explicit little-endian offsets, obtains
+the declared argument count, resolves the numeric event identifier, and returns
+one typed \texttt{bufferdecoder.Event}. This representation contains the
+context, the public logical-event name and the decoded arguments; it is the
+same representation later used by policy matching and detector dispatch.
 
-The indexed wire format allows a producer to omit unavailable evidence without
-renumbering later fields. The decoder therefore accumulates records by their
-encoded index and reconstructs the public argument order only after all
-available payloads have been interpreted. Listing~\ref{lst:decoder-indexed-arguments}
-shows this schema-directed core. The unknown-event diagnostic and final
-schema-order reconstruction are omitted.
+Explicit offset decoding avoids relying on Go structure padding. It also makes
+the cross-language contract visible: the field order, widths and total size
+must remain aligned with the C definition discussed in
+Section~\ref{sec:implementation-binary-contract}. The implementation does not
+generate this contract from one source or enforce it with a compile-time C/Go
+layout assertion, so changes to either side still require review and tests.
+
+Argument interpretation is schema directed. The wire stream contains an index
+followed by a payload, but no independent type tag. The event registry maps the
+event identifier to a public name and ordered argument specification; the index
+then determines the expected name and decoding type. Listing~\ref{lst:schema-decoding}
+shows the central part of this procedure.
 
 \begin{lstlisting}[
-    caption={Schema-directed reconstruction of indexed arguments (abridged).},
-    label={lst:decoder-indexed-arguments}
+    language=Go,
+    caption={Schema-directed decoding of indexed arguments (abridged).},
+    label={lst:schema-decoding}
 ]
 spec, ok := events.GetSpec(eventID)
 if !ok {
     return decodeUnknownArguments(rawArgs, eventID, argnum)
 }
-decoded := make(map[int]Argument, argnum)
-offset := 0
 for seen := 0; seen < argnum && offset < len(rawArgs); seen++ {
     index := int(rawArgs[offset])
     offset++
     if index >= len(spec.Args) {
-        return nil, fmt.Errorf("argument index %d out of range for event %s", index, spec.Name)
+        return nil, fmt.Errorf("argument index %d out of range", index)
     }
     argSpec := spec.Args[index]
     value, consumed, err := decodeArgRecord(rawArgs[offset:], argSpec.DecodeAs)
     if err != nil {
-        return nil, fmt.Errorf("decode arg %d (%s) [event %d %s]: %w",
-            index, argSpec.Name, eventID, spec.Name, err)
+        return nil, err
     }
     offset += consumed
-    decoded[index] = Argument{
-        Name:  argSpec.Name,
-        Type:  argSpec.DecodeAs,
-        Value: value,
-    }
+    decoded[index] = Argument{Name: argSpec.Name, Type: argSpec.DecodeAs, Value: value}
 }
 \end{lstlisting}
 
-The temporary map belongs to one decode call. A later duplicate index replaces
-the earlier value, after which the function emits only present entries in
-schema order. The wire carries no independent type tag, so the selected schema
-is both the decoding instruction and the type contract; malformed payloads are
-contained as errors at this boundary rather than forwarded as partially typed
-events.
+Fixed-width scalar values, length-prefixed strings and byte sequences, bounded
+string arrays, compact argument arrays, credentials and socket-address records
+use dedicated payload decoders. Strings have terminal NUL bytes removed and
+must be valid UTF-8. Missing arguments are intentional: an eBPF producer may
+be unable to collect one field while preserving the schema indexes of fields
+that follow it. The decoder finally emits present arguments in schema order,
+rather than in their incidental order in the delivered record.
 
-The decoder rejects a truncated fixed context, unknown event identifiers,
-argument indexes outside the selected schema, truncated scalar or variable
-payloads, oversized variable-length fields and invalid UTF-8 in textual
-payloads. Since the wire format carries no type tag, it cannot independently
-compare a transmitted type with the schema: structurally incompatible data
-fail during decoding, while byte-compatible data are interpreted as the
-registered type.
+Two registries divide responsibility. The event registry is authoritative for
+the user-space public event identifiers, names and argument schemas. The probe
+registry is authoritative for which physical programs can be selected and
+attached. Several probes can converge on one schema, and internal support
+probes need not define a public decoded event. Cross-registry tests are used to
+detect drift between these domains, while retaining this separation of decoding
+and attachment concerns.
 
-The boundary is intentionally tolerant of partial event enrichment. Missing
-arguments are accepted, and a duplicate index replaces the previous value for
-that index. The implementation also does not require every trailing byte to be
-consumed. The resulting guarantee is therefore bounded, schema-directed
-interpretation rather than a unique canonical encoding. Unknown or
-structurally unsafe records are diagnosed and discarded without terminating
-the reader loop.
+Table~\ref{tab:decoder-admission} states the decoder boundary precisely. It
+should not be described as a fully canonical wire parser: its purpose is
+bounded, schema-directed interpretation of records that reach user space.
 
-Consistency tests across the event and probe registries ensure that ordinary
-public probes have decoder definitions, decoder events are publicly
-producible, internal probes remain hidden, and multi-probe families retain
-their expected composition. Numeric C and Go event constants are still
-synchronised by maintenance discipline rather than by an automated
-cross-language constant comparison, making this interface a notable
-compatibility obligation.
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.16}
+    \begin{tabularx}{\textwidth}{@{}p{0.27\textwidth}X X@{}}
+        \toprule
+        \textbf{Condition} & \textbf{Current behaviour} & \textbf{Boundary} \\
+        \midrule
+        Short common context, missing count, unknown event ID, invalid index, or
+        truncated scalar/payload & Decoding fails and the record is discarded. &
+        No policy, detector or output consumer receives the record. \\
+        Oversized variable value or invalid UTF-8 string & Decoding fails against
+        configured size and text bounds. & Bounded payload interpretation. \\
+        Schema argument absent & Accepted; only encountered arguments are
+        returned. & Intentional sparse encoding. \\
+        Duplicate index, trailing bytes, or a count that exceeds complete
+        records at the end of the stream & Not universally rejected; a later
+        duplicate replaces the earlier value. & The format is not strict
+        canonical framing. \\
+        Producer type differs from the registered type at the same width & Not
+        independently detectable because the wire format has no type tag. &
+        Manual C/Go schema synchronisation remains necessary. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Decoder admission and permissiveness boundaries.}
+    \label{tab:decoder-admission}
+\end{table}
+
+Malformed records and transport loss are distinct. A loss notification means
+that no record bytes were retained by the perf buffer; a decode error means
+that bytes reached user space but could not be safely interpreted. Both are
+diagnosed without converting the condition into a monitored event, and later
+records continue through the loop.
 
 \section{User-Space Event Selection and Admission}
 \label{sec:userspace-event-selection}
 
-CLI selection, explicit exclusions and any finite policy-derived allow-list
-determine the effective logical-event set before object loading. The loader
-uses that set to retain only the required public producers and support
-dependencies, as described in
-Section~\ref{sec:implementation-loader-registry}. This reduces attachment and
-verification work without changing the public event schemas.
+After decoding, the runtime applies three short-circuit admission gates. The
+first checks whether the decoded logical name belongs to the selected event
+set. The second applies an optional exact command-name filter. The third asks
+the policy manager whether the event is selected by the active policy set. A
+policy evaluates its common scope and then its rules; matching suppress rules
+override monitor or detect rules. With no configured policies, this final gate
+is permissive.
 
-After decoding, the effective event set, command-name filter and typed policy
-predicates form the user-space admission path. Rejected events reach neither
-raw presentation nor detector dispatch. The later \texttt{alerts-only}
-control suppresses raw presentation without bypassing detector evaluation.
-The exact UID guard described in
-Section~\ref{sec:implementation-selection-filtering} acts earlier in kernel
-space and remains intentionally narrower than this admission path.
+Listing~\ref{lst:event-admission} shows the admission order and the resulting
+fan-out. Diagnostics and optional socket enrichment are omitted because they
+do not change the host-event admission contract.
+
+\begin{lstlisting}[
+    language=Go,
+    caption={Decoded-event admission and consumer fan-out (abridged).},
+    label={lst:event-admission}
+]
+event, err := bufferdecoder.DecodeEvent(raw)
+if err != nil {
+    return
+}
+if !p.eventEnabled(event.EventName) {
+    return
+}
+if !p.commEnabled(event.Context.CommString()) {
+    return
+}
+if !p.policyEnabled(event) {
+    return
+}
+if !p.cfg.Alerts.Only {
+    if err := p.printer.Print(event); err != nil {
+        p.logger.Error("print event", zap.Error(err))
+    }
+}
+p.processDetectors(ctx, event)
+\end{lstlisting}
+
+An admission failure prevents both normalised-event presentation and detector
+evaluation. The \texttt{alerts-only} option has a narrower role: it suppresses
+only normalised-event presentation after admission. It does not bypass policy
+matching, disable detector processing or suppress alert presentation. This
+keeps collection and analytical semantics independent from whether an operator
+wants to see the ordinary event stream.
+
+The policy manager is intentionally not a detector. Policies decide which
+observations are relevant to a scenario through event, command, UID and
+argument constraints; detectors decide whether one admitted event or a short
+sequence produces an alert. The current policy modes record monitor, detect or
+suppress intent, but monitor and detect matches share the same admission path.
+Suppression is the only mode that removes a matching event from subsequent
+consumers.
+
+The active loop distinguishes valid rejections from failures. At debug level,
+only the first few filter drops are logged in order to avoid unbounded
+diagnostic output. Decode errors, detector errors and rendering errors are
+logged separately, while the loop remains active. This behaviour is established
+by code inspection and component tests; a direct end-to-end unit test for the
+complete admission order is still absent.
 
 \section{Policy and Detector Engine}
 \label{sec:implementation-policy-detector}
 
-Policy and detector paths may identify a YAML file or a directory. Directory
-loading is non-recursive and sorted by filename, giving deterministic catalogue
-construction. YAML documents are converted into internal definitions before
-they are consumed. Policy conversion applies omitted mode and intent defaults
-and compiles compact argument filters into internal predicates. Unsupported
-compact forms are skipped, and the YAML decoders do not universally reject
-unknown fields. At event time, scope is tested before alternative rules;
-exclusions and matching suppress policies take precedence. An exact finite
-policy allow-list may also narrow the logical-event set before probe loading,
-as described in Section~\ref{sec:userspace-event-selection}.
+\subsection{YAML Policy and Detector Definitions}
+\label{subsec:implementation-yaml-definitions}
 
-Detector parsing validates structural metadata, referenced event names,
-severity, time-window bounds, ATT\&CK identifier syntax and correlation
-compatibility. Runtime construction then normalises field and operator names,
-splits membership operands, parses numeric operands and compiles ordered steps
-and the correlation plan. Equality, inequality, containment, membership,
-prefix, suffix, existence, non-existence and numeric comparisons consequently
-run without reparsing the YAML representation. The registry rejects invalid or
-duplicate identities, and the dispatcher builds an event-name index once.
-Only detectors interested in the admitted logical event are invoked; a failure
-remains associated with its detector and does not stop the other candidates.
+Policies and detectors enter the runtime through separate YAML models. A policy
+contains a name, mode, intent, common scope and one or more rules. Empty policy
+mode and intent default to \texttt{monitor} and \texttt{threat\_hunting}; an
+event selector with no include list means all events except explicit exclusions.
+Rules compose as alternatives within a policy, whereas the fields of one rule
+compose as constraints. A suppress policy may not select detectors.
 
-The stateless path evaluates global conditions and the event-specific
-condition group, then creates an alert from that single evidence event. A
-definition becomes an ordered stateful sequence only when it is marked
-stateful and contains more than one compiled step. Otherwise, multiple steps
-act as alternative event-specific groups rather than as temporal stages.
+Detector documents provide stable identity and descriptive metadata together
+with consumed events, conditions, optional ordered steps, output information,
+and optional ATT\&CK metadata. The loader reads explicit files or the YAML
+files in supplied directories in deterministic lexical order, validates known
+event names, and compiles conditions, numeric constants, event sets and
+correlation plans before event processing begins. The current YAML decoder is
+not strict about unknown fields; a spelling error can therefore be ignored by
+the external parser rather than becoming a schema error. This is an
+implementation limitation rather than a feature of the rule language.
 
-For the stateful path, each correlation key owns the index of the next expected
-step, the first-observation time and the ordered evidence retained so far.
-Listing~\ref{lst:collective-state-advance} shows expiry handling and successful
-advancement for an existing key. Global-condition evaluation, key construction
-and first-step creation are omitted from the excerpt.
+Policy metadata can reduce the loaded detector catalogue using identifiers,
+severity, tags, statefulness, tactics and techniques. Values within one
+criterion have alternative semantics, while populated criteria are conjunctive.
+Selections from separate policies are combined. The complete detector catalogue
+is parsed before this selection, so an invalid unselected definition can still
+fail startup. The selection check currently uses the broad event-name set of a
+definition, including optional requirements; Chapter~6 should evaluate the
+practical consequences of this conservative choice rather than treating it as
+a claim of detection coverage.
+
+\subsection{Point and Collective Detection}
+\label{subsec:implementation-point-collective}
+
+The detector engine creates a validated registry and an event-name dispatch
+index once at bootstrap. The index prevents each decoded event from being
+offered to the entire catalogue. Listing~\ref{lst:detector-dispatch} shows the
+event-time dispatch loop. It invokes only candidates for the current event and
+keeps one detector failure from preventing the remaining candidates from
+running.
 
 \begin{lstlisting}[
-    caption={Go state transition for a collective detector sequence (abridged).},
-    label={lst:collective-state-advance}
+    language=Go,
+    caption={Event-indexed detector dispatch with isolated errors.},
+    label={lst:detector-dispatch}
+]
+for _, detector := range detectors {
+    result.Invoked++
+    alerts, err := detector.OnEvent(ctx, event)
+    if err != nil {
+        result.Errors = append(result.Errors, DetectorError{
+            DetectorID: detector.Definition().ID,
+            Err:        err,
+        })
+        continue
+    }
+    if len(alerts) > 0 {
+        result.Alerts = append(result.Alerts, alerts...)
+    }
+}
+\end{lstlisting}
+
+A point detector applies its compiled top-level conditions to one admitted
+event. If it declares steps, the event must also match a step and its step
+conditions. A successful point match immediately creates an alert containing
+that source event. Conditions support equality, inequality, containment,
+membership, prefix and suffix tests, existence tests, and numeric comparisons.
+The implementation therefore performs deterministic rule evaluation; it does
+not train on observed activity or calculate an anomaly score.
+
+A collective detector is a stateful detector with more than one ordered step.
+It first applies its global conditions, derives local correlation keys, and
+attempts to advance the next expected step of a partial sequence. Completion
+creates an alert containing the ordered evidence. An event that matches the
+first step can start or replace the partial sequence for its key. Events need
+not be contiguous in the complete input stream, but they are considered in the
+arrival order delivered to the runtime. The engine does not reorder records or
+infer cross-CPU causality.
+
+\subsection{Local Correlation Strategies, State Bounds and Alert Deduplication}
+\label{subsec:implementation-correlation-deduplication}
+
+Correlation plans are compiled during detector construction, so the hot path
+does not parse strategy names from YAML. Process correlation uses the host PID
+together with task start time, preventing a reused numeric PID from joining two
+process lifetimes. Process-tree correlation additionally tries the immediate
+parent identity for a later event; it does not reconstruct arbitrary ancestry
+or maintain a persistent process graph. Resource correlation uses the
+device--inode pair in compatible event arguments, not the pathname. Cgroup
+correlation uses the local kernel cgroup ID. Composite correlation concatenates
+the configured dimensions and requires every component to be present and equal.
+These values are local observation keys, not Kubernetes workload identities.
+
+The unavailable \texttt{user\_session} strategy is rejected at parsing time
+because normalised events do not expose a stable local session identifier. The
+implementation deliberately does not approximate a session with a UID. Missing
+process, resource or cgroup data yields no correlation key and therefore no
+state transition; it does not fall back to a weaker identity.
+
+Listing~\ref{lst:collective-transition} shows the core transition of a
+collective detector. The omitted code constructs the initial key and stores the
+first matching event; it does not alter the one-state-per-key rule.
+
+\begin{lstlisting}[
+    language=Go,
+    caption={Advancing one bounded collective sequence (abridged).},
+    label={lst:collective-transition}
 ]
 for _, key := range lookupKeys {
     state, ok := d.state[key]
@@ -236,120 +417,163 @@ for _, key := range lookupKeys {
 }
 \end{lstlisting}
 
-Completion deletes the partial sequence before creating its alert. An
-intermediate transition writes the advanced state back, while a new first-step
-match starts or replaces the one sequence allowed for its key. The correlation
-plan is compiled into typed key components: process identity combines host PID
-and start time; process-tree lookup adds only the immediate parent candidate;
-resource identity requires device and inode without a pathname fallback; and
-cgroup identity requires a non-zero local identifier. Composite strategies are
-ordered conjunctions, so any missing component prevents key construction. The
-unsupported \texttt{user\_session} strategy is rejected rather than
-approximated from UID.
+Table~\ref{tab:correlation-bounds} contains the local-state limits in one
+place. They are safeguards for a constrained monitoring agent, not performance
+results. Expiry is checked for the key addressed by a relevant event and the
+detector periodically prunes unrelated state while it processes qualifying
+traffic. Although the engine exposes \texttt{Flush}, the production runtime
+does not call it on an independent timer. Idle stale state is consequently
+removed on later relevant traffic, explicit API use, or capacity pressure.
 
-An omitted stateful window defaults to two seconds and cannot exceed five
-seconds. Its deadline begins with the first observation and is not extended by
-later progress. Each detector retains at most 4,096 incomplete keys and one
-sequence per key; starting that key again replaces its previous state, while
-capacity pressure evicts the oldest first observation. The addressed state is
-checked for expiry on each relevant event, and unrelated state is scanned
-opportunistically at intervals no longer than one second. \texttt{Flush}
-removes expired entries without timeout alerts, but the main runtime does not
-schedule it periodically, so idle expired entries may remain until later
-activity or an external flush.
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.16}
+    \begin{tabularx}{\textwidth}{@{}p{0.25\textwidth}p{0.22\textwidth}X@{}}
+        \toprule
+        \textbf{Mechanism} & \textbf{Current value} & \textbf{Effect} \\
+        \midrule
+        Default stateful window & 2 seconds & Used when a stateful detector
+        omits an explicit duration. \\
+        Maximum stateful window & 5 seconds & Longer definitions fail
+        validation; the bound limits retained partial evidence. \\
+        State pruning interval & \texttt{min(window/2, 1 second)} & Avoids a
+        full scan for every relevant event while retaining direct expiry checks
+        for the addressed key. \\
+        Partial sequence capacity & 4,096 keys per detector & A new key at
+        capacity evicts the oldest incomplete state; an existing key is updated.
+        \\
+        Alert deduplication & 5-second window; entries older than 10 seconds
+        are pruned & Suppresses repeated alert keys after matching. The cache
+        has no independent capacity bound. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Local-correlation and alert-deduplication bounds.}
+    \label{tab:correlation-bounds}
+\end{table}
 
-After evaluation, the engine deduplicates alerts over five seconds. Its key
-uses detector identity, title and severity together with the first evidence
-event's name, PID, UID, command and ordered arguments. Later evidence from a
-collective match is not part of that key, so different completions sharing the
-same first observation may be collapsed. This suppresses alert delivery only;
-it does not alter admitted events or detector sequence state.
+Alert deduplication is deliberately separate from collective correlation. It
+operates after a detector has produced an alert, using detector identity, title,
+severity and fields from the first evidence event. It suppresses repeated
+equivalent keys within the configured processing-time window, but does not
+represent the complete collective sequence, the correlation key or a durable
+causal identity. It is therefore a presentation-noise control rather than a
+second correlation mechanism.
 
-Finally, detector definitions may carry framework, version, tactic, technique,
-data-source and data-component fields. Validation accepts unmapped detectors
-and checks only the syntax of non-empty tactic and technique identifiers; no
-external ATT\&CK catalogue is consulted and mappings are not inferred. When a
-detector matches, its complete configured threat metadata is copied into the
-evidence-bearing alert passed to
-Section~\ref{sec:implementation-output-logging}.
+\subsection{MITRE ATT\&CK Metadata Propagation}
+\label{subsec:implementation-attack-metadata}
+
+Detector definitions may contain a framework, version, tactics, techniques,
+data sources and data components. The implementation validates the syntactic
+shape of tactic and technique identifiers and copies this metadata into each
+matching alert. Policies may also use tactic and technique identifiers to
+select detector definitions during bootstrap. This gives alert consumers a
+consistent \gls{attack} vocabulary for classifying the intended security
+meaning of a detector \cite{strom2020attack}.
+
+The local runtime does not download an ATT\&CK catalogue or validate whether a
+mapping is semantically appropriate. Unmapped detectors are accepted. ATT\&CK
+metadata should consequently be presented as classification and traceability
+information attached to detector evidence, not as proof of detector
+correctness, technique coverage or research novelty.
 
 \section{Output and Structured Logging}
 \label{sec:implementation-output-logging}
 
-Independent event and alert printers support line-oriented JSON and compact
-table formats on standard output. Operational diagnostics instead use the Zap
-logger on standard error and do not participate in security-data
-serialisation.
+The output package is a presentation boundary, not another normalisation stage.
+It adapts the decoded event into JSON or compact text and adapts a detector
+alert into a user-facing record containing detector identity, severity, ordered
+evidence and optional threat metadata. JSON preserves typed values and may add
+readable labels, whereas compact text is intended for interactive inspection.
+The event model used by output is derived from the same decoded representation
+used by policies and detectors.
 
-Before JSON rendering, a decoded event is adapted to a presentation record that
-groups process, host and kernel metadata, converts fixed-size C strings and
-retains typed arguments. Table output selects a smaller set of fields and
-resolves selected numeric values, including signals, capabilities, operation
-flags, file descriptors and error numbers, into readable labels while
-retaining their numeric meaning.
+Normalised event output and alert output both use standard output. They are
+configured independently and can therefore use different formats in one run;
+the resulting stream is not guaranteed to be one homogeneous machine-readable
+schema. The \texttt{alerts-only} option suppresses normalised event output but
+leaves detector evaluation and alert rendering active. Point alerts expose one
+source event, while collective alerts retain their ordered evidence in JSON and
+render a bounded sequence in compact text.
 
-An alert record contains detector identity, title, severity, timestamp,
-metadata, ATT\&CK classification and the retained event evidence. Point-alert
-table output includes a source-event summary. Collective-alert output instead
-prints the ordered evidence sequence and avoids repeating its first event in
-separate source fields. The rendered sequence is bounded to 1,024 characters
-and is truncated with an ellipsis when necessary. Structured JSON preserves
-the complete evidence representation supplied to the output adapter.
+Operational diagnostics follow a separate path. The Zap logger writes to
+standard error in console or JSON form, with debug, info, warn and error
+levels. It receives runtime lifecycle messages, selected libbpf diagnostics,
+perf-buffer loss notifications, decoding failures, detector failures and
+presentation failures \cite{uber_zap}. Zap does not serialise monitored events
+or alerts. This prevents infrastructure errors from being mistaken for security
+observations and allows diagnostics to change without changing the data model
+seen by event and alert consumers.
 
-Operational diagnostics are implemented with Zap \cite{uber_zap}. The logger
-supports console and JSON encodings and debug, info, warning and error
-thresholds. It uses ISO-8601 timestamps, disables caller and stack-trace fields,
-and writes to standard error. Runtime startup, attachment, transport loss,
-decoding failures, detector failures, output errors and cleanup conditions use
-this path.
+Table~\ref{tab:output-boundaries} summarises the operating channels and error
+boundaries. Fatal configuration and startup failures are returned to the command
+entry point, while most record-local failures are logged and the loop continues.
+Logger synchronisation errors are currently discarded, so the design does not
+claim durable delivery of every diagnostic message.
 
-Libbpf diagnostics enter through a callback and receive a structured source
-field. Libbpf warnings are mapped to warning records; other admitted messages
-are mapped to debug records. Combined callback and Zap level filtering keeps
-CO-RE relocation detail available for diagnosis without mixing it into normal
-event or alert output. Configuration errors that occur before logger creation
-are returned to the command entry point and printed as a concise outer error
-boundary.
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.16}
+    \begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}p{0.22\textwidth}p{0.16\textwidth}X@{}}
+        \toprule
+        \textbf{Class} & \textbf{Source model} & \textbf{Channel} &
+        \textbf{Failure behaviour} \\
+        \midrule
+        Normalised event & \texttt{bufferdecoder.Event} through a printer &
+        stdout & A write failure is diagnosed; subsequent events continue. \\
+        Detector alert & Detector alert with one event or ordered evidence &
+        stdout & A rendering failure is diagnosed; it does not change detector
+        state. \\
+        Operational diagnostic & Runtime, decoder, detector, output or libbpf
+        condition & stderr through Zap & Record-local conditions are logged
+        without becoming security events. \\
+        Fatal bootstrap or lifecycle error & Command, definition loading or
+        runtime setup return value & stderr through the command path & Startup
+        or shutdown reports an error; cleanup errors are joined where available.
+        \\
+        \bottomrule
+    \end{tabularx}
+    \caption{User-space output and diagnostic boundaries.}
+    \label{tab:output-boundaries}
+\end{table}
 
 \section{Containerisation and Deployment Considerations}
 \label{sec:implementation-containerisation}
 
-The Dockerfile uses a builder and a runtime stage. The builder is based on Go
-1.22 and Debian Bookworm and installs the C, LLVM, libelf and zlib development
-dependencies required by the same aggregate build used on the host. It copies
-the complete source tree because the Go module replaces libbpfgo with the local
-third-party checkout. The final Debian slim stage installs only the libelf and
-zlib runtime libraries and copies the generated executable.
+The container build follows a builder/runtime split. The builder stage compiles
+the local libbpf dependency, eBPF object and Go executable; the runtime stage
+copies the resulting executable and declares the runtime packages used by that
+image. As described in Chapter~4, the eBPF object is embedded during the Go
+build, so the normal executable path does not require a neighbouring object
+file.
 
-The final image does not need a separate eBPF object because that object is
-embedded in the executable. In the current Dockerfile, however, the policy and
-detector YAML catalogues are not copied into the runtime stage. A container
-that uses those external definitions must therefore receive them through a
-mounted path or be built from a derivative image that includes them. This is a
-packaging boundary rather than an event-processing limitation.
+The image does not embed or copy the policy and detector YAML catalogues.
+Deployments that use these inputs must supply them explicitly, for example
+through a bind mount or a derived image. Similarly, BTF and the relevant kernel
+facilities remain host resources. The provided Docker path uses broad host
+integration and privileges sufficient for the prototype; it is not a
+minimal-privilege security profile.
 
-The container continues to operate against the host kernel. The supplied run
-target grants privileged execution, joins the host PID and cgroup namespaces,
-and exposes host BTF and bpffs paths; it is not a least-privilege deployment
-profile. The target does not mount tracefs or debugfs explicitly, so hosts on
-which libbpf requires those paths for selected tracepoints need an additional
-mount or an adjusted launch command.
-
-No Kubernetes deployment resources are part of the repository; node-level
-deployment and cluster-wide alert aggregation remain external integration work.
+No Kubernetes manifest, lifecycle configuration, least-privilege capability
+set or deployment validation is implemented in the repository. A future
+orchestration layer may place the monitoring agent in a wider platform, but
+this chapter makes no claim that such a deployment has been implemented or
+evaluated.
 
 \section{User-Space Implementation Summary}
 \label{sec:user-space-implementation-summary}
 
-The Go runtime turns a logical event selection into an owned set of physical
-attachments, consumes the perf-buffer records defined by Chapter~4 and decodes
-them through the shared event registry. Admitted typed events then follow one
-path towards raw presentation and another towards indexed policy and detector
-evaluation, while operational diagnostics remain isolated on standard error.
+The user-space implementation turns a selected perf-buffer record into a
+typed event, applies explicit admission gates, and then routes admitted
+evidence to presentation and deterministic detection. Policies control scope
+and suppression, while detectors evaluate point conditions or bounded local
+sequences and attach ATT\&CK classification metadata to their alerts. The
+runtime keeps kernel-facing resource ownership, record interpretation,
+analytical state and presentation responsibilities separate.
 
-Point detectors retain one event as evidence, whereas collective detectors
-advance bounded, detector-specific state through short ordered sequences.
-Correlation keys preserve local process, immediate parent, resource, cgroup or
-composite identity, and ATT\&CK metadata accompanies the resulting alert
-without altering the matching decision. Chapter~6 evaluates these behaviours
-and the resource cost of the complete kernel-to-user-space pipeline.
+The implementation also defines clear boundaries for the following evaluation.
+The registry and decoder tests establish important structural invariants, but
+attachment behaviour, output under workload, alert quality, loss and resource
+consumption require target-environment evidence. Chapter~6 evaluates these
+behaviours on the stated Rocky Linux environment.
