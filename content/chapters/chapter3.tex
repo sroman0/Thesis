@@ -236,79 +236,40 @@ Figure~\ref{fig:kernel-userspace-architecture} summarises the division of
 responsibilities between kernel space and user space, together with the
 control, monitoring, and diagnostic interactions that cross this boundary.
 
-Kernel space is responsible for observing the operations selected during
-bootstrap and for constructing the corresponding logical events. When an
-attached hook is reached, the associated eBPF program extracts bounded process
-context and event-specific arguments, applies the optional exact-match
-effective \gls{uid} guard, and serialises the resulting record according to the
-shared binary contract. The completed record is then submitted through the
-perf buffer used as the primary kernel-to-user-space transport channel \cite{linux_bpf_helpers}.
+Kernel space owns bounded observation and record construction. Selected eBPF
+programs collect process context and operation-specific evidence, may retain
+short-lived state needed to join an entry point with its return, and submit a
+record through the perf-event channel. The optional exact-match effective
+\gls{uid} filter can reject records before this transfer. These mechanisms
+reduce traffic or complete an observation; they do not evaluate policies or
+classify security behaviour.
 
-Some operations require information that is not available at a single
-instrumentation point. In these cases, an entry-side program preserves a
-limited amount of temporary state and a later return-side program completes
-the event with the operation outcome. This entry/exit model is used only for
-event construction. It does not introduce policy evaluation or detection logic
-into the kernel.
+User space owns configuration and the components expected to evolve more
+frequently. The Go runtime determines the effective event scope, translates
+logical events into the required probe set, manages loading and attachment
+through \texttt{libbpfgo}, decodes admitted records and evaluates policies and
+detectors \cite{aquasecurity_libbpfgo}. Event presentation, alert delivery and
+structured operational diagnostics remain separate outputs because they serve
+different consumers.
 
-User space owns the more changeable and semantically rich responsibilities.
-During bootstrap, the Go runtime validates the configuration, policies, and
-detector definitions, derives the effective event scope, resolves the
-dependencies of the selected logical events, and determines which eBPF
-programs must be loaded and attached. It manages this lifecycle through
-\texttt{libbpf} and its Go bindings, \texttt{libbpfgo}
-\cite{aquasecurity_libbpfgo}. In this role, \texttt{libbpf} provides the
-user-space facilities required to load eBPF objects and manage programs, maps,
-and attachments, while \texttt{libbpfgo} exposes those facilities to the Go
-runtime.
-
-During monitoring, the runtime receives binary records from the perf buffer,
-decodes their context and indexed arguments, and converts them into normalised
-events. The policy predicates that could not be resolved during bootstrap,
-including constraints that depend on decoded process information and
-suppression rules, are then evaluated in user space. Events admitted by this
-gate may be routed to the event output and are also dispatched to the detector
-engine constructed from the detector definitions selected during bootstrap. 
-Point detectors evaluate individual events, whereas collective
-detectors correlate short ordered sequences within bounded temporal and state
-limits. Only successful detector evaluations produce alerts, which are routed
-through an output path distinct from raw event presentation.
-
-The diagnostic path is implemented through the structured Zap logging library
-\cite{uber_zap}, forming a third independent stream. These diagnostics describe 
-conditions affecting the control or data path while remaining distinct from both 
-monitored events and detector alerts.
-
-The boundary is therefore selective rather than absolute. User space controls
-which kernel programs are loaded and may configure the narrow kernel-side \gls{uid}
-guard, while kernel programs may retain short-lived state needed to complete a
-record. Higher-level policy interpretation, event normalisation, detection,
-and presentation remain in user space. Conversely, user-space processing
-depends on the correctness and delivery of the records constructed in kernel
-space and cannot recover an observation that was rejected before submission or
-lost during transport.
+This boundary keeps kernel work constrained while allowing the interpretation
+layer to change without rebuilding every collection program. It also defines a
+clear failure boundary: user space cannot recover an observation rejected in
+kernel space or lost before decoding, and kernel space does not possess the
+state or context required for higher-level detection.
 
 \subsection{End-to-End Event Lifecycle}
 \label{subsec:end-to-end-event-lifecycle}
 
-Before collection begins, the configuration, policy rules, and detector
-definitions are validated. Where the active policies provide exact event
-allowlists, these may narrow the event scope requested through the remaining
-configuration. Policies may also restrict the available detector catalogue
-before the detector runtime is constructed. The probe registry then resolves
-the resulting public logical events into the producer programs and internal
-dependencies required to construct them, while unrelated registered programs
-are excluded from loading and attachment.
-
-Once monitoring is active, reaching a selected hook invokes its associated
-eBPF program. The Go runtime decodes the record according to the event registry 
-and converts it into a normalised event. It then evaluates the remaining event 
-and process constraints whose application depends on decoded user-space context. 
-An admitted event may be routed  independently to event presentation and to the 
-relevant detectors selected during  bootstrap. Disabling event presentation 
-therefore does not prevent detector evaluation. A successful single-event or 
-collective detector evaluation produces an alert that preserves the source 
-observations responsible for the match and propagates the available MITRE ATT\&CK metadata.
+Before collection begins, validated configuration, policies and detector
+definitions determine the logical event scope. The probe registry expands that
+scope into public producers and any internal support probes, while unrelated
+programs remain disabled. During monitoring, a selected hook produces a binary
+record that is transported, decoded against the event registry and admitted or
+rejected by the remaining user-space policy constraints. Admitted events are
+then routed independently to presentation and detector evaluation. A matched
+point condition or bounded sequence produces an alert that retains its source
+evidence and available MITRE ATT\&CK metadata.
 
 \begin{figure}[H]
     \centering
@@ -506,28 +467,13 @@ user-space event registry, and the resulting normalised event.}
     \label{fig:binary-event-contract}
 \end{figure}
 
-The contract remains valid only while the producer and consumer agree on the
-common context layout and each public event identifier resolves to a single
-compatible schema. The indices, types, and encodings of the supplied arguments
-must also agree with that schema. A record with an unknown identifier or an
-inconsistent structure is therefore reported and discarded before it reaches
-policy evaluation, detector processing, or presentation. The runtime does not
-convert such a record into a partially trusted event.
-
-Decoding and normalisation are related but distinct stages. The decoder first
-validates the common record structure and resolves the event identifier through
-the registry. It can then interpret each indexed argument according to the
-registered schema and verify that the delivered payload is structurally
-consistent. Only a successfully decoded record is converted into the common
-normalised representation consumed by policies, detectors, and output
-components.
-
-The probe registry does not define the binary schema, but it must remain
-consistent with the same logical interface. Every probe that produces a public
-event must refer to an event identifier for which the user-space registry
-provides a valid decoding contract. Chapter~4 describes the producer and wire
-contract, while Chapter~5 explains the probe and event registries that preserve
-these relationships in user space.
+The contract remains valid only while producer and consumer agree on the
+context layout, event identifiers and indexed argument schemas. Unknown or
+structurally inconsistent records are discarded before policy, detector or
+output processing. The probe registry does not define this schema, but every
+public producer must refer to a logical event that the event registry can
+decode. Chapter~4 describes the producer and wire format; Chapter~5 describes
+the user-space registries and admission path that preserve this agreement.
 
 \subsection{Perf-Buffer Transport and Failure Boundaries}
 \label{subsec:perf-buffer-failure-boundaries}
@@ -553,15 +499,6 @@ same buffer. Perf-event transport instead uses per-CPU buffers, which may use
 memory less efficiently under uneven load and do not provide a total ordering
 across CPUs. These properties were accepted in favour of target compatibility
 and a simpler operational design.
-
-The choice was also influenced by the evolution of the prototype. An
-intermediate version maintained both perf-buffer and BPF ring-buffer readers,
-even though their records eventually entered the same decoding pipeline.
-Converging on perf-event transport removed duplicated lifecycle and
-failure-handling paths and ensured that the transport no longer depended on
-which probe produced the event. This decision does not demonstrate that perf
-buffers are generally faster, since no controlled comparison between the two
-mechanisms was performed.
 
 Perf-event delivery remains asynchronous and finite. Records may be lost when
 a per-CPU buffer cannot be consumed quickly enough, and the resulting loss

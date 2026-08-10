@@ -103,8 +103,16 @@
 
 \listoftables
 
-\printunsrtglossary[style=long,title=Acronyms,type=\acronymtype]
+\begingroup
+\small
+\printunsrtglossary[
+    style=long,
+    title=Acronyms,
+    type=\acronymtype
+]
+\endgroup
 
+\cleardoublepage
 \input{common/post_summary_config.tex}
 
 \pagenumbering{arabic}
