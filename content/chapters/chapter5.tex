@@ -3,10 +3,10 @@
 
 Chapter~4 described how the eBPF programs construct and submit binary event
 records through the perf buffer. This chapter starts at the corresponding
-user-space boundary. It explains how the Go runtime prepares the selected
-programs, interprets delivered records, admits them into the analytical path,
-evaluates configurable policies and detectors, and presents events, alerts and
-operational diagnostics. The focus is on the implemented ownership and failure
+user-space boundary. It explains how the Go runtime turns the selected monitoring configuration into
+a managed user-space pipeline, from program preparation and record
+interpretation to policy-driven analysis, detector evaluation, and the delivery
+of monitoring and diagnostic results. The focus is on the implemented ownership and failure
 boundaries rather than on eBPF theory, hook catalogues or experimental results.
 
 \section{Loader, Probe Registry and Attachment Lifecycle}
