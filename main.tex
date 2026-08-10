@@ -61,6 +61,23 @@
 
 \lstset{style=thesis-c}
 
+\lstdefinelanguage{YAML}{
+      sensitive=false,
+      keywords={true,false,null},
+      keywordstyle=\color{black}\bfseries,
+      comment=[l]{\#},
+      commentstyle=\color{listingcomment}\itshape,
+      morestring=[b]',
+      morestring=[b]",
+      stringstyle=\color{black}
+  }
+
+  \lstdefinestyle{thesis-yaml}{
+      style=thesis-c,
+      language=YAML
+  }
+
+
 % If using biblatex, this is correct. If using bibtex, place inside packages or main.
 \addbibresource{bibliography.bib}
 
