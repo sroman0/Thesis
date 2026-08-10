@@ -622,7 +622,7 @@ Tracee policies determine which part of the available event domain is relevant
 to a monitoring scenario. A policy combines a scope, which identifies the
 workloads or execution contexts to which it applies, with rules that select
 events and optionally constrain their data. The same policy model can be
-expressed through a plain YAML or JSON document or through a Kubernetes custom
+expressed through a plain \gls{yaml} or \gls{json} document or through a Kubernetes custom
 resource, allowing the monitoring intent to remain consistent across local and
 orchestrated deployments
 \cite{aquasecurity_tracee_policies}.
@@ -664,7 +664,7 @@ A detector declares the input events required by its logic and receives
 matching observations from the event pipeline. It can then evaluate those
 observations and produce a derived event when its condition is satisfied.
 Detectors may be implemented in Go when programmatic control and access to
-runtime state are required, or described through YAML when the desired
+runtime state are required, or described through \gls{yaml} when the desired
 condition can be expressed declaratively
 \cite{aquasecurity_tracee_detectors,aquasecurity_tracee_detector_api}.
 
@@ -675,9 +675,9 @@ information can preserve the relationship between a derived result and the
 observations from which it originated
 \cite{aquasecurity_tracee_detector_api}.
 
-The detector API permits implementations to consume several event types and
+The detector \gls{api} permits implementations to consume several event types and
 retain internal state. This makes stateful detection possible, but it should
-not be interpreted as a predefined general-purpose temporal language. The API
+not be interpreted as a predefined general-purpose temporal language. The \gls{api}
 provides the mechanisms through which a detector may combine evidence, while
 the meaning and limits of that correlation remain part of the detector
 implementation.
@@ -692,7 +692,7 @@ same observation can therefore be rendered for interactive inspection or
 serialised for machine processing without changing its detection logic
 \cite{aquasecurity_tracee_output}.
 
-Tracee supports human-readable tables, structured JSON records, and custom
+Tracee supports human-readable tables, structured \gls{json} records, and custom
 templates. Events can be written to local destinations, forwarded to external
 logging infrastructure, or delivered through webhooks. Output streams provide
 an additional routing layer by allowing different portions of the event domain
@@ -780,7 +780,7 @@ collective detection model, and runtime behaviour can be examined directly.
 Falco is a runtime security engine organised around rules evaluated over event
 sources. Kernel system-call activity can be captured through its driver
 architecture, while plugins provide additional sources. Falco rules are
-declarative YAML objects containing a condition, output description, priority,
+declarative \gls{yaml} objects containing a condition, output description, priority,
 and optional reusable lists, macros, tags, and exceptions. A matching rule
 produces an alert that can be routed to configured outputs
 \cite{falcosecurity_falco_kernel_architecture,falcosecurity_falco_rules,

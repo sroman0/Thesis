@@ -5,7 +5,7 @@
 This chapter describes how the kernel-space collection design developed in
 Chapter~3 is realised in the prototype. It covers the build artefacts, shared
 event-construction mechanisms, implemented hook families, binary record
-contract, perf-buffer transport, early UID admission and compatibility work
+contract, perf-buffer transport, early \gls{uid} admission and compatibility work
 required by the target Rocky Linux kernel. Chapter~5 follows the record into
 the Go runtime and describes loading, decoding, policy evaluation, detection
 and presentation. Experimental behaviour and performance measurements are
@@ -19,7 +19,7 @@ The build process consists of three ordered stages. First, the libbpf source in
 \path{dist/libbpf/obj/libbpf.a}, together with the required headers and package
 metadata. Second, Clang compiles the eBPF source into
 \path{dist/project.bpf.o} for the x86-64 target. Finally, the Go application is
-built through CGO using the local libbpf library and libbpfgo bindings, producing
+built through \gls{cgo} using the local libbpf library and libbpfgo bindings, producing
 the executable \path{dist/project}. The Makefile preserves this order and
 ensures that all stages use the dependencies included in the repository rather
 than system-installed versions.
@@ -30,7 +30,7 @@ runtime, the application can load the embedded object without requiring a
 separate copy beside the executable. Developers may still provide an external
 object through the command-line configuration for testing or compatibility
 analysis. The executable nevertheless remains dependent on the host kernel,
-its BTF data, the required privileges and the system libraries used by CGO.
+its BTF data, the required privileges and the system libraries used by \gls{cgo}.
 
 \section{eBPF Program Implementation}
 \label{sec:implementation-ebpf-programs}
@@ -207,7 +207,7 @@ creation model and the syscall outcome.
 Syscall results alone do not provide the complete parent-child state observed
 by the scheduler. The \texttt{sched\_process\_fork} tracepoint runs after the
 child task has been created and receives both task structures. It records the
-host PID and TID of the parent and child, together with the child's start time.
+host \gls{pid} and \gls{tid} of the parent and child, together with the child's start time.
 Listing~\ref{lst:sched-process-fork-evidence} shows the extraction of this
 effect-level evidence.
 
@@ -433,7 +433,7 @@ The \texttt{security\_task\_fix\_setuid} hook adds the mediation-stage view. It
 records the old and proposed real, effective, saved and filesystem UIDs,
 together with a flag that distinguishes the set-ID operation category. The
 eBPF program compares the two credential proposals and suppresses the event
-when none of the monitored UID fields changes. Since the hook is observed
+when none of the monitored \gls{uid} fields changes. Since the hook is observed
 before installation and its result is not captured, the event describes the
 transition examined by the security subsystem rather than a confirmed change.
 
@@ -515,7 +515,7 @@ available.
 
 Cross-process control is represented by \texttt{ptrace} and
 \texttt{security\_task\_kill}. The \texttt{ptrace} entry program retains the
-request code, target PID and the address and data arguments supplied by the
+request code, target \gls{pid} and the address and data arguments supplied by the
 caller. These pointer values are deliberately treated as opaque: the eBPF
 program does not copy the memory to which they refer. At syscall exit, the
 stored request is combined with the return value, allowing user space to
@@ -523,7 +523,7 @@ distinguish an accepted request from an error.
 
 Signal delivery is observed through \texttt{security\_task\_kill}. The common
 event context already identifies the source task, while the event-specific
-payload describes the destination through its host PID and TID, UID and command
+payload describes the destination through its host \gls{pid} and \gls{tid}, \gls{uid} and command
 name. The signal number completes the source--operation--target relation.
 Signal zero is retained because it can be used to test whether a target exists
 and whether the caller has permission to signal it, even though no signal is
@@ -531,7 +531,7 @@ actually delivered.
 
 Listing~\ref{lst:security-task-kill-relation} shows how the destination identity
 is extracted from the target task rather than inferred from a caller-supplied
-numeric PID.
+numeric \gls{pid}.
 
 \begin{lstlisting}[
     language=C,
@@ -589,10 +589,10 @@ the event does not confirm that the proposed action was installed.
 Resource-limit monitoring combines a mediation view with syscall-level
 outcomes. The \texttt{security\_task\_setrlimit} hook receives the resolved
 target task and proposed kernel \texttt{rlimit} structure. It records the target
-host PID, resource identifier, soft limit and hard limit while the operation is
+host \gls{pid}, resource identifier, soft limit and hard limit while the operation is
 being checked. It does not include the final decision.
 
-The paired \texttt{prlimit64} event instead preserves the target PID, resource
+The paired \texttt{prlimit64} event instead preserves the target \gls{pid}, resource
 identifier, addresses of the new and old user-space limit structures, and the
 syscall return value. The pointed-to structures are not dereferenced by this
 event. These two observations are therefore complementary: the security hook
@@ -859,7 +859,7 @@ performed by the kernel before invoking the security hook.
 
 Cross-process memory access is monitored through
 \texttt{process\_vm\_readv} and \texttt{process\_vm\_writev}. These events
-record the target PID, addresses and element counts of the local and remote
+record the target \gls{pid}, addresses and element counts of the local and remote
 I/O-vector arrays, operation flags and the number of bytes transferred or the
 returned error. The vector elements and transferred memory contents are not
 copied. This retains evidence that one process accessed another process's
@@ -886,8 +886,8 @@ task's namespace proxy.
 
 The hook compares the old and proposed namespace sets and emits an event only
 when at least one monitored identifier changes. The record contains the task
-PID and only the new identifiers for the changed mount, PID-for-children, UTS,
-IPC, network or cgroup namespaces. Unchanged fields are omitted from the
+\gls{pid} and only the new identifiers for the changed mount, PID-for-children, \gls{uts},
+\gls{ipc}, network or cgroup namespaces. Unchanged fields are omitted from the
 indexed argument stream, keeping the record sparse and suppressing no-op
 transitions. User namespaces are not part of this namespace-proxy comparison;
 credential-related user-namespace changes are observed separately through the
@@ -900,7 +900,7 @@ implementation preserves this distinction.
 
 The \texttt{cgroup\_attach\_task} raw tracepoint reports movement of a task to
 a destination cgroup. It records the destination cgroup and hierarchy
-identifiers, the supplied cgroup path, target command name, host PID and TID,
+identifiers, the supplied cgroup path, target command name, host \gls{pid} and \gls{tid},
 and whether the operation concerns the complete thread group. This allows the
 monitor to observe containment changes even when the task identity itself
 remains unchanged.
@@ -914,7 +914,7 @@ local lifecycle observation.
 Cgroup identifier extraction also contains a compatibility decision specific
 to the supported kernel range. The layout of the underlying
 \texttt{kernfs\_node} identifier differs between older kernels, newer kernels
-and the hidden KABI representation used by the target RHEL-derived kernel.
+and the hidden \gls{kabi} representation used by the target \gls{rhel}-derived kernel.
 CO-RE field-existence checks select the available layout at load time, allowing
 the same helper to obtain the identifier without hard-coding a single
 structure version.
@@ -1094,50 +1094,29 @@ them, whereas malformed records that reach user space are reported by the
 decoder. Section~\ref{subsec:perf-buffer-failure-boundaries} discusses the
 capacity and ordering consequences of this transport model.
 
-%\section{Kernel-Side UID Filtering}
-%\label{sec:implementation-selection-filtering}
-%
-%The exact effective-UID guard runs during common eBPF initialisation. User space
-%updates two fields in the singleton configuration map: an enable
-%flag and one 32-bit UID. When enabled, the program compares that value with the
-%effective UID returned for the current task and exits before complete context
-%enrichment and submission on a mismatch. This is a single equality filter. It
-%does not implement ranges, exclusion sets, namespace-aware identities or a
-%general kernel policy language.
-%
-%Listing~\ref{lst:ebpf-early-admission} is the complete decision helper. Its
-%placement inside the shared initialiser makes the same narrow guard available
-%to every producer that uses the framework from
-%Section~\ref{subsec:implementation-shared-event-construction}.
-%
-%\begin{lstlisting}[
-%    language=C,
-%    caption={Exact effective-UID admission guard.},
-%    label={lst:ebpf-early-admission}
-%]
-%statfunc bool should_drop_by_kernel_uid_filter(config_entry_t *config)
-%{
-%    if (config == NULL)
-%        return false;
-%    if (config->kernel_uid_filter_enabled == 0)
-%        return false;
-%    u32 current_uid = (u32) bpf_get_current_uid_gid();
-%    return current_uid != config->kernel_uid_filter;
-%}
-%\end{lstlisting}
-%
-%A null configuration pointer or a disabled flag admits the event. When active,
-%only a mismatch is dropped; no state is retained by the helper and no
-%authorisation result is produced. The guard reduces construction and transport
-%for excluded effective UIDs, while richer admission remains a user-space
-%operation.
-%
-%The configuration-map update currently depends on an explicit C layout. The
-%Go runtime patches the filter-enable field at byte offset 12 and the UID at
-%byte offset 16 after checking the map value size. The complete C configuration
-%structure is not mirrored in Go, and no loaded-object integration test reads
-%these fields back. The offsets must consequently evolve together with the C
-%structure in the same way as the event contract.
+\section{Kernel-Side UID Filtering}
+\label{sec:implementation-selection-filtering}
+
+The shared event initialiser implements an optional exact effective \gls{uid}
+filter. When the filter is enabled, the program obtains the current task's
+effective \gls{uid} and compares it with the configured value. A mismatch terminates
+the hook invocation before complete context enrichment and perf-buffer
+submission. Placing this check in the common initialisation path applies the
+same admission rule to every producer that uses the framework from
+Section~\ref{subsec:implementation-shared-event-construction}.
+
+This mechanism is deliberately narrow. It accepts one effective \gls{uid} through an
+equality comparison and does not implement ranges, exclusion sets,
+namespace-aware identities or policy expressions. A missing configuration
+entry or a disabled flag admits the event, while a rejected event creates no
+correlation state and no authorisation result. Richer event selection remains
+a user-space responsibility.
+
+The Go runtime writes the enable flag and \gls{uid} into fixed fields of the shared
+configuration map before event processing begins. These fields form a binary
+contract with the C configuration structure and must therefore evolve
+together. Chapter~5 owns the runtime configuration and map-update lifecycle;
+this section owns only the kernel-side admission behaviour.
 
 \section{Compatibility and Verifier Challenges}
 \label{sec:implementation-compatibility-verifier}
@@ -1146,7 +1125,7 @@ CO-RE adapts field accesses when compatible BTF information is available, but
 it does not remove every difference between kernel versions. The shared
 helpers therefore contain explicit alternatives for task identifiers and start
 times, capability layouts and inode change times. Cgroup identification also
-includes a dedicated path for the internal layout used by the RHEL 8 kernel
+includes a dedicated path for the internal layout used by the \gls{rhel} 8 kernel
 family. At load time, CO-RE selects only branches whose required fields exist
 on the target kernel.
 
@@ -1156,13 +1135,13 @@ them. Otherwise, an x86-64-specific fallback derives the register frame from
 the task stack using the page and stack dimensions expected on the target
 system. Compatible 32-bit processes are detected separately and their syscall
 numbers are translated before event classification. The source also retains a
-bounded red-black-tree VMA lookup for kernels that use that representation. It
+bounded red-black-tree \gls{vma} lookup for kernels that use that representation. It
 is not called by the memory hooks described in
 Section~\ref{subsec:implementation-memory-namespace-hooks} and therefore does
 not extend the evidence emitted by those events.
 
 The verifier introduces a second class of constraints. Path reconstruction,
-string-array capture and VMA traversal use fixed loop bounds. Buffer writes and
+string-array capture and \gls{vma} traversal use fixed loop bounds. Buffer writes and
 submitted record sizes repeat explicit checks in forms the target verifier can
 prove safe. The shared syscall-exit path also limits the return-argument index
 to values below 16, because the broader generic bound was rejected on the
@@ -1187,7 +1166,7 @@ preserve the distinction between process requests, security mediation,
 committed transitions and returned outcomes, while the indexed argument
 contract allows unavailable fields to be omitted without changing their
 schema identity. Records cross the kernel boundary through the perf buffer
-after optional exact-UID admission.
+after optional exact \gls{uid} admission.
 
 The resulting object is intentionally adapted to the verified Rocky Linux
 target. CO-RE handles compatible layout differences, while explicit branches
