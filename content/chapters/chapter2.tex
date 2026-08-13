@@ -479,14 +479,6 @@ declarative alerting engine and a hook-centred system with optional response
 \subsection{Tracee}
 \label{subsec:tracee}
 
-Tracee is the closest architectural reference for the proposed system because
-it separates eBPF collection from event processing, policy selection,
-detection and output. In the pipeline shown in
-Figure~\ref{fig:tracee-architecture}, kernel and networking hooks produce
-observations that become events before higher-level analysis and delivery
-\cite{aquasecurity_tracee,aquasecurity_tracee_architecture,
-her2025ebpfsecuritytools}.
-
 \begin{figure}[H]
     \centering
     \makebox[\textwidth][c]{%
@@ -500,6 +492,14 @@ her2025ebpfsecuritytools}.
     {Tracee high-level architecture \cite{aquasecurity_tracee_architecture}.}
     \label{fig:tracee-architecture}
 \end{figure}
+
+Tracee is the closest architectural reference for the proposed system because
+it separates eBPF collection from event processing, policy selection,
+detection and output. In the pipeline shown in
+Figure~\ref{fig:tracee-architecture}, kernel and networking hooks produce
+observations that become events before higher-level analysis and delivery
+\cite{aquasecurity_tracee,aquasecurity_tracee_architecture,
+her2025ebpfsecuritytools}.
 
 The figure uses the signature-oriented terminology of the release in which it
 was published. Current documentation keeps the same broad pipeline but favours

@@ -426,7 +426,7 @@ receiving registries and admission path.
 \subsection{Perf-Buffer Transport and Failure Boundaries}
 \label{subsec:perf-buffer-failure-boundaries}
 
-The event path uses perf-event transport through per-CPU buffers
+The event path uses perf-event transport through per-CPU buffers \\
 (\texttt{\gls{bpf}\_MAP\_TYPE\_PERF\_EVENT\_ARRAY}). This is different from the
 shared multi-producer \gls{bpf} ring buffer exposed through
 \texttt{\gls{bpf}\_MAP\_TYPE\_RINGBUF}
@@ -467,6 +467,12 @@ The runtime moves through validation, setup, active monitoring and cleanup.
 Figure~\ref{fig:userspace-runtime-lifecycle} distinguishes failures that prevent
 a session from starting from those confined to one record.
 
+Configuration and external definitions are checked before kernel resources are
+acquired. The accepted scope is then translated into the eBPF programs and
+detectors required for the session. Setup failures abort startup; a malformed
+record or a detector error is reported without stopping later processing. The
+runtime releases resources it acquired even if initialisation was only partial.
+
 \begin{figure}[H]
     \centering
     \makebox[\textwidth][c]{%
@@ -479,12 +485,6 @@ a session from starting from those confined to one record.
     {Simplified user-space runtime lifecycle.}
     \label{fig:userspace-runtime-lifecycle}
 \end{figure}
-
-Configuration and external definitions are checked before kernel resources are
-acquired. The accepted scope is then translated into the eBPF programs and
-detectors required for the session. Setup failures abort startup; a malformed
-record or a detector error is reported without stopping later processing. The
-runtime releases resources it acquired even if initialisation was only partial.
 
 \subsection{Decoding, Normalisation and Event Registration}
 \label{subsec:decoding-normalisation-registration}
