@@ -6,21 +6,22 @@ user-space runtime as separate implementation concerns. This chapter evaluates
 their integrated behaviour in a controlled container environment. The
 experiment follows one scenario from workload execution to the evidence
 observed by the monitor, the alert produced by the collective detector and the
-resources charged to the monitored containers. The purpose is not to estimate
-general detection accuracy or production-wide overhead, but to determine
+resources charged to the monitored containers. The purpose is to determine
 whether the implemented pipeline behaves as intended under a reproducible
 node-local workload.
 
 \section{Evaluation Objectives and Experimental Protocol}
 \label{sec:evaluation-objectives-protocol}
 
-The evaluation addresses three questions. First, can the monitoring agent
-observe security-relevant activity generated inside another container when the
-Pod does not share its process namespace with the host? Second, can the
-configured collective detector assemble the expected sequence of process and
-file events while leaving a controlled benign interaction without an alert?
-Third, how does exact kernel-side \gls{uid} filtering affect the resources
-charged to the monitor container during the attack workload?
+The evaluation addresses three questions. 
+\begin{itemize}
+    \item Can the monitoring agent observe security-relevant activity generated inside 
+    another container when the Pod does not share its process namespace with the host?
+    \item Can the configured collective detector assemble the expected sequence of process and
+    file events while leaving a controlled benign interaction without an alert?
+    \item How does exact kernel-side \gls{uid} filtering affect the resources
+    charged to the monitor container during the attack workload?
+\end{itemize}
 
 Two campaigns were conducted. The functional campaign comprised three benign
 windows and four exploit windows. Each window had a distinct run identifier and
@@ -34,7 +35,7 @@ each run.
 The performance protocol used a ten-second warm-up and then selected samples
 whose endpoint timestamps fell within the externally recorded workload
 interval. The sampling period was nominally one second, although reads performed
-through the Minikube SSH path introduced some interval variation. A project
+through the Minikube \gls{ssh} path introduced some interval variation. A project
 acceptance gate of 5\% was applied to the mean \gls{cpu} time charged to the monitor cgroup,
 expressed as a percentage of one core. This gate is local to the project and is
 not a claim about total host overhead. Results are reported descriptively using
@@ -44,10 +45,10 @@ variation among those runs rather than a wider population.
 The experimental input was the scenario executed by the trigger together with
 the selected monitoring profile. The main dependent observations were the
 event evidence and alert count in the functional campaign, and cgroup CPU,
-memory, RSS, PID count, node CPU and workload duration in the performance
+memory, \gls{rss}, PID count, node CPU and workload duration in the performance
 campaign. The protocol was designed to hold the host, cluster allocation,
 target images, policy, detector and synthetic flag fixed. Run identifiers and
-UTC window boundaries tied
+\gls{utc} window boundaries tied
 the scenario output to the corresponding monitor log, preventing alerts from
 earlier activity in the accumulated container log from being counted in a
 later run.
@@ -73,16 +74,28 @@ set \texttt{hostPID}, \texttt{hostNetwork} and
 shared the Pod network but did not share one process namespace
 \cite{kubernetes_pod_networking,kubernetes_process_namespace}.
 
-Table~\ref{tab:evaluation-environment} summarises the controlled environment.
-The target ran as \gls{uid} and group identifier 10001, while the trigger used
+\begin{figure}[H]
+    \centering
+    \includegraphics[
+        width=0.95\textwidth,
+        keepaspectratio
+    ]{figures/chapter6/kubernetes-testbed-topology.drawio.png}
+    \caption[Minikube experimental testbed]
+    {Experimental topology of the three-container Pod and its relationship
+    with the shared node kernel.}
+    \label{fig:evaluation-kubernetes-testbed}
+\end{figure}
+
+Figure~\ref{tab:evaluation-environment} provides the corresponding configuration
+details. The target ran as \gls{uid} and group identifier 10001, while the trigger used
 10002. Both were non-root, had privilege escalation disabled, used read-only
 root filesystems and dropped all Linux capabilities. The monitor ran as root in
 a privileged container with an unconfined seccomp profile. It mounted host BTF
-read-only and the host BPF and tracing filesystems read-write. These permissions
+read-only and the host \gls{bpf} and tracing filesystems read-write. These permissions
 were required by the laboratory configuration and must not be interpreted as a
 least-privilege deployment result \cite{kubernetes_privileged_containers}.
 The default service-account token also remained mounted, although no evaluated
-scenario depended on Kubernetes API access.
+scenario depended on Kubernetes \gls{api} access.
 
 \begin{table}[H]
     \centering
@@ -283,7 +296,7 @@ Container CPU was calculated from cgroup-v1 \texttt{cpuacct.usage} deltas,
 which report accumulated cgroup CPU time in nanoseconds, divided by wall-clock
 deltas \cite{linux_cgroup_v1_cpuacct}. A value of 100\% represents one fully used core.
 Node CPU was derived from \path{/proc/stat} and used the complete two-core node
-as its 0--100\% scale. Cgroup memory usage and resident set size (RSS) were
+as its 0--100\% scale. Cgroup memory usage and resident set size (\gls{rss}) were
 collected separately because they describe different boundaries: cgroup memory
 can include charged pages beyond the resident process set. PID counts and the
 workload's internal duration were also preserved.
@@ -313,10 +326,10 @@ monitor; the largest individual samples were 1.32\% and 9.27\%, respectively.
     \begin{tabularx}{\textwidth}{@{}p{0.19\textwidth}p{0.18\textwidth}p{0.18\textwidth}p{0.20\textwidth}X@{}}
         \toprule
         \textbf{Profile and metric owner} &
-        \textbf{CPU mean $\pm$ SD} &
+        \textbf{CPU mean $\pm$ \gls{sd}} &
         \textbf{Median; range} &
-        \textbf{Campaign max memory / RSS} &
-        \textbf{Workload duration mean $\pm$ SD} \\
+        \textbf{Campaign max memory / \gls{rss}} &
+        \textbf{Workload duration mean $\pm$ \gls{sd}} \\
         \midrule
         Filtered monitor & 0.39\% $\pm$ 0.02 &
         0.39\%; 0.36--0.41\% & 100.51 / 39.36~MiB &
@@ -330,14 +343,14 @@ monitor; the largest individual samples were 1.32\% and 9.27\%, respectively.
         \bottomrule
     \end{tabularx}
     \caption{Replicated performance results, with five runs per profile. CPU
-    and duration values summarise per-run observations; memory and RSS are the
+    and duration values summarise per-run observations; memory and \gls{rss} are the
     maxima across all selected samples and replicas. Metrics belong to the
     container named in the first column.}
     \label{tab:evaluation-performance-results}
 \end{table}
 
 The maximum cgroup memory attributed to the monitor was 100.51~MiB when
-filtered and 112.16~MiB when unfiltered; maximum RSS was 39.36 and 46.02~MiB.
+filtered and 112.16~MiB when unfiltered; maximum \gls{rss} was 39.36 and 46.02~MiB.
 These maxima describe the resources observed in this campaign rather than a
 steady-state requirement. The no-monitor memory values belong to the target and
 are included only to characterise the workload context.
@@ -410,7 +423,7 @@ separately.
 The performance profiles were rotated cyclically rather than randomly assigned.
 Recreating the Pod reduced carry-over of container state, but did not remove
 host load, cache effects or variation in exploit execution. Sampling through
-the Minikube SSH path produced intervals longer than the nominal one second.
+the Minikube \gls{ssh} path produced intervals longer than the nominal one second.
 Because a sample was selected by its endpoint timestamp while its CPU value
 covered the preceding interval, the first selected sample could include some
 pre-workload activity and the final partial interval could be omitted. The
@@ -422,7 +435,7 @@ host sequence.
 \noindent\textbf{Construct validity.}
 CPU charged to the monitor cgroup is not equivalent to total monitoring
 overhead, and target metrics from the no-monitor profile are not a monitor
-baseline. Cgroup memory and RSS cover different resources. Event timestamp
+baseline. Cgroup memory and \gls{rss} cover different resources. Event timestamp
 spans do not measure detector or output latency. Likewise, the absence of a
 loss diagnostic does not prove loss-free perf-buffer transport. The functional
 interpretation also depends on preserving the difference between an LSM
@@ -431,7 +444,7 @@ mediation event and the successful syscall return.
 \medskip
 \noindent\textbf{External validity.}
 The experiment used one Rocky Linux kernel build, one Docker-backed Minikube
-node, one Kubernetes version, one public CTF challenge and one detector tailored
+node, one Kubernetes version, one public \gls{ctf} challenge and one detector tailored
 to that challenge. The benign interaction represented only a narrow control.
 No alternative kernels, long-duration workloads, multi-node deployments or
 production workload mixtures were evaluated. The results therefore describe

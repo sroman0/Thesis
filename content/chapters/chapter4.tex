@@ -18,14 +18,14 @@ The build process consists of three ordered stages. First, the libbpf source in
 \path{3rdparty/libbpfgo/libbpf/src} is compiled locally into the static library
 \path{dist/libbpf/obj/libbpf.a}, together with the required headers and package
 metadata. Second, Clang compiles the eBPF source into
-\path{dist/project.bpf.o} for the x86-64 target. Finally, the Go application is
+\path{dist/project.\gls{bpf}.o} for the x86-64 target. Finally, the Go application is
 built through \gls{cgo} using the local libbpf library and libbpfgo bindings, producing
 the executable \path{dist/project}. The Makefile preserves this order and
 ensures that all stages use the dependencies included in the repository rather
 than system-installed versions.
 
 The eBPF object is also embedded in the Go executable. For this reason,
-\path{dist/project.bpf.o} must be generated before the Go build starts. At
+\path{dist/project.\gls{bpf}.o} must be generated before the Go build starts. At
 runtime, the application can load the embedded object without requiring a
 separate copy beside the executable. Developers may still provide an external
 object through the command-line configuration for testing or compatibility
@@ -164,7 +164,7 @@ event and therefore produces no record.
 
 After the saved arguments have been copied, the return program removes the map
 entry and appends the operation result. New entry data is stored with
-\texttt{BPF\_ANY}, allowing it to replace stale state left by a missing return
+\texttt{\gls{bpf}\_ANY}, allowing it to replace stale state left by a missing return
 hook. The map is therefore temporary correlation storage, not a history of
 process activity.
 
@@ -604,7 +604,7 @@ clock. It records the proposed seconds and nanoseconds together with the
 timezone offset and daylight-saving field. Changing wall-clock time is
 privilege-sensitive and can affect timestamp-based analysis, for example an attacker 
 can leverage the time modification to obscure their activities or perform some time 
-based TOTP authentication, but this mediation-stage event does 
+based \gls{totp} authentication, but this mediation-stage event does 
 not by itself establish that the new time was installed.
 
 This design keeps cross-process relations, task configuration and resource
@@ -807,7 +807,7 @@ syscall does not necessarily modify every namespace represented by the
 committed-state event.
 
 The \texttt{memfd\_create} event monitors the creation of an anonymous,
-RAM-backed file. Such an object initially has no conventional filesystem
+\gls{ram}-backed file. Such an object initially has no conventional filesystem
 pathname, but it may later be mapped into memory or used as an executable
 image. The event records the requested name and creation flags, followed by
 the returned file descriptor or a negative error. This makes successful
@@ -960,13 +960,13 @@ assigning a security meaning to ordinary module-management activity.
 
 The eBPF hooks observe a different kernel-facing interface. They are kprobes
 attached to Linux Security Module functions invoked while eBPF commands and
-objects undergo security checks. They are not themselves BPF LSM enforcement
+objects undergo security checks. They are not themselves \gls{bpf} LSM enforcement
 programs and do not modify the kernel's decision.
 
 The \texttt{security\_bpf} hook monitors operations entering the security path
-of the \texttt{bpf} syscall. Its purpose is to expose requests such as map
-creation, program loading and program attachment. The event records the BPF
-command and attribute size, but does not copy \texttt{union bpf\_attr}, whose
+of the \texttt{\gls{bpf}} syscall. Its purpose is to expose requests such as map
+creation, program loading and program attachment. The event records the \gls{bpf}
+command and attribute size, but does not copy \texttt{union \gls{bpf}\_attr}, whose
 active fields depend on the command.
 
 The \texttt{security\_bpf\_map} hook observes security checks involving an
@@ -980,7 +980,7 @@ existing eBPF program. It records the program identifier, name and type,
 allowing programs intended for kprobes, tracepoints, cgroups and other
 execution contexts to be distinguished.
 
-Together, these hooks identify the requested BPF operation and the map or
+Together, these hooks identify the requested \gls{bpf} operation and the map or
 program involved in security mediation.
 
 Dynamic instrumentation and kernel-facing interfaces expose activity that is
@@ -1083,9 +1083,9 @@ only after the index and complete payload have been copied successfully.
 Once the event is complete, the common submission helper refreshes its task
 context, optionally adds a user-space stack identifier and calculates the
 actual record size. It then sends the record through
-\texttt{bpf\_perf\_event\_output} to the perf-event buffer associated with the
+\texttt{\gls{bpf}\_perf\_event\_output} to the perf-event buffer associated with the
 current CPU. The Go runtime consumes these per-CPU buffers through a libbpfgo
-perf reader; the current implementation does not retain a BPF ring-buffer
+perf reader; the current implementation does not retain a \gls{bpf} ring-buffer
 transport path.
 
 Transport loss and decoding failure remain separate conditions. The reader's

@@ -479,21 +479,21 @@ the user-space registries and admission path that preserve this agreement.
 \label{subsec:perf-buffer-failure-boundaries}
 
 The operational event path uses perf-event transport, in which records are
-delivered through per-CPU perf ring buffers ( \texttt{BPF\_MAP\_TYPE\_PERF\_EVENT\_ARRAY}). 
-This mechanism should not be confused with the BPF ring-buffer facility represented by
-\texttt{BPF\_MAP\_TYPE\_RINGBUF}. Although both use circular buffering, the
+delivered through per-CPU perf ring buffers ( \texttt{\gls{bpf}\_MAP\_TYPE\_PERF\_EVENT\_ARRAY}). 
+This mechanism should not be confused with the \gls{bpf} ring-buffer facility represented by
+\texttt{\gls{bpf}\_MAP\_TYPE\_RINGBUF}. Although both use circular buffering, the
 former maintains separate buffers for individual CPUs, whereas the latter
 provides a shared multi-producer ring buffer
 \cite{linux_perf_ring_buffer,linux_bpf_ring_buffer}.
 
 Compatibility with the target kernel was the principal reason for selecting
 perf-event transport. The perf-event interface is available on the deployed
-Rocky Linux environment, whereas the BPF ring buffer belongs to a later
+Rocky Linux environment, whereas the \gls{bpf} ring buffer belongs to a later
 upstream kernel generation and cannot be assumed to be present through a
 vendor backport. The transport used by every event was therefore based on the
 interface verified on the concrete target.
 
-The BPF ring buffer offers advantages on compatible kernels, including shared
+The \gls{bpf} ring buffer offers advantages on compatible kernels, including shared
 capacity across CPUs and stronger ordering between records submitted to the
 same buffer. Perf-event transport instead uses per-CPU buffers, which may use
 memory less efficiently under uneven load and do not provide a total ordering

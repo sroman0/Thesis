@@ -1,7 +1,27 @@
 % !TEX encoding = UTF-8 Unicode
 % !TEX root = ../main.tex
-This thesis presents the design and implementation of a security monitoring tool that collects and analyzes process-related information directly from the operating system kernel using eBPF (extended Berkeley Packet Filter). By leveraging kernel-level instrumentation, the system captures detailed process events with high accuracy and minimal overhead, overcoming the limitations of traditional user-space monitoring approaches.
+This thesis describes an eBPF-based tool for monitoring process activity on
+  Rocky Linux 8.10. Its development centred on a set of kernel hooks that observe
+  how processes are created, replace their executable image, change credentials,
+  interact with other processes and access files, memory, namespaces and cgroups.
 
-The proposed tool adopts a modular and efficient architecture to ensure scalability and real-time data collection. The gathered information is structured to support security analysis, enabling the detection of anomalous behaviors such as unauthorized executions and privilege escalations.
+  The hooks are attached to syscalls, tracepoints, kernel functions and Linux
+  Security Module interfaces. Since each attachment point exposes a different
+  stage of an operation, the resulting events distinguish between a process
+  request, a security check, a committed state change and the result returned by
+  the kernel. Events are encoded in a bounded binary format, sent through a
+  perf-event channel and decoded by a Go application.
 
-This work demonstrates how kernel-derived process data, combined with eBPF technology, can enhance system visibility and provide a solid foundation for advanced security monitoring and threat detection.
+  In user space, the tool loads only the probes required by the selected
+  configuration and evaluates the decoded events through policies and
+  deterministic detectors. Policies define the monitoring scope, whereas
+  detectors recognise either individual events or short, ordered sequences of
+  related activity. Alerts retain the evidence that produced them and can be
+  classified using MITRE ATT\&CK metadata.
+
+  The prototype was tested on a single-node Minikube environment using an adapted
+  Capture the Flag challenge. During the experiment, it observed process activity
+  originating from a separate container and reconstructed the sequence associated
+  with shell execution and access to a protected file. These results show that
+  eBPF hooks can support detailed, configurable process monitoring while keeping
+  collection close to the kernel events being observed.

@@ -201,8 +201,8 @@ well-defined execution constraints
 \subsection{Execution Model, Verifier and JIT Compilation}
 \label{subsec:ebpf-execution-verifier-jit}
 
-An eBPF program is compiled into instructions for the BPF virtual machine and
-submitted to the kernel through the BPF user-space interface. The instruction
+An eBPF program is compiled into instructions for the \gls{bpf} virtual machine and
+submitted to the kernel through the \gls{bpf} user-space interface. The instruction
 set defines general-purpose registers, a bounded stack, arithmetic and branch
 instructions, memory operations, and calls to kernel-provided functions. The
 program does not execute as unrestricted kernel code: its available context,
@@ -278,7 +278,7 @@ whenever its associated hook or execution context is invoked
 \label{subsec:ebpf-object-loading-attachment}
 
 The source code of an eBPF application is not passed directly to the kernel.
-Clang first compiles it into BPF instructions stored in an \gls{elf} object.
+Clang first compiles it into \gls{bpf} instructions stored in an \gls{elf} object.
 The object groups programs into named sections and also carries map
 declarations, licence information, symbols, BTF metadata and relocation
 records. Section names help a loader infer the program type and expected
@@ -288,7 +288,7 @@ that must be adapted before the program can be accepted by the target kernel
 
 A user-space loader, commonly built on \texttt{libbpf}, opens this object and
 turns its declarations into kernel objects. It creates or reuses the required
-maps, resolves relocations and submits each enabled program through the BPF
+maps, resolves relocations and submits each enabled program through the \gls{bpf}
 system-call interface. The kernel then applies the verifier to every submitted
 program. Loading is therefore an active compatibility boundary: a syntactically
 valid object may still fail because a required program type, helper, kernel
@@ -298,7 +298,7 @@ symbol or verifier behaviour is unavailable on the host
 Loading and attachment are separate operations. A successfully loaded program
 exists as a kernel object referenced from user space, but it does not run until
 it is connected to a compatible hook. Depending on the program and hook type,
-this connection may be represented by a BPF link or by tracing-specific
+this connection may be represented by a \gls{bpf} link or by tracing-specific
 infrastructure such as a perf event. The attachment owns the relationship
 between the program and its trigger and can be removed independently from the
 program itself. This separation allows one object file to contain several
@@ -309,7 +309,7 @@ monitoring configuration
 File descriptors provide the user-space references through which programs,
 maps and links are configured and eventually released. Closing the final
 reference normally permits the corresponding kernel object to be destroyed,
-whereas pinning can give an object a persistent name in the BPF filesystem and
+whereas pinning can give an object a persistent name in the \gls{bpf} filesystem and
 allow it to outlive the process that created it. Runtime ownership and cleanup
 are consequently part of the operational model, not merely loader
 housekeeping: stale attachments or pinned objects may continue consuming
@@ -384,7 +384,7 @@ Maps are typed kernel objects that allow eBPF programs to preserve state across
 invocations and exchange data with user space. Each map type defines its own
 access and concurrency semantics, while its structure and capacity are
 established at creation time. By moving persistent configuration and temporary
-state outside the constrained BPF stack, maps extend the information that a
+state outside the constrained \gls{bpf} stack, maps extend the information that a
 program can retain between executions. Accesses performed by eBPF code remain
 subject to verifier validation and to the rules imposed by the selected map
 type \cite{linux_bpf_maps,linux_bpf_syscall}.
@@ -424,7 +424,7 @@ documentation \cite{linux_bpf_helpers,linux2026ebpfverifier}.
 
 Event transport carries records produced during eBPF execution to user space,
 where they can be decoded and processed without extending the work performed
-inside the kernel. The BPF ring buffer provides a shared
+inside the kernel. The \gls{bpf} ring buffer provides a shared
 multi-producer, single-consumer channel designed to use buffer capacity across
 CPUs and preserve the order in which records are reserved. Perf-event
 transport follows a different model: a
@@ -457,7 +457,7 @@ monitor's correctness model rather than as a transparent delivery channel
         \textbf{Main implication} \\
         \midrule
 
-        BPF ring buffer &
+        \gls{bpf} ring buffer &
         Shared multi-producer, single-consumer buffer &
         Shares capacity across CPUs and preserves reservation order between
         producers. \\
@@ -493,7 +493,7 @@ types exposed by the deployed kernel. BTF and CO-RE provide the metadata and
 relocation mechanisms used to address this problem.
 
 \gls{btf} represents types and related metadata in a compact format understood
-by the kernel and BPF tooling. BTF may describe C types and strings and can also
+by the kernel and \gls{bpf} tooling. BTF may describe C types and strings and can also
 carry function, line, and relocation information. When kernel BTF is available,
 loaders and debugging tools can reason about kernel data structures without
 depending solely on a set of headers copied from one kernel build
