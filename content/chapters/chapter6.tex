@@ -1,19 +1,16 @@
 \chapter{Experimental Evaluation}
 \label{ch:experimental-evaluation}
 
-Chapters~4 and~5 described the kernel-space collection path and the
-user-space runtime as separate implementation concerns. This chapter evaluates
-their integrated behaviour in a controlled container environment. The
-experiment follows one scenario from workload execution to the evidence
-observed by the monitor, the alert produced by the collective detector and the
-resources charged to the monitored containers. The purpose is to determine
-whether the implemented pipeline behaves as intended under a reproducible
-node-local workload.
+Chapters~4 and~5 described kernel collection and user-space processing
+separately. This chapter evaluates them together in a controlled container
+environment. A reproducible node-local scenario is followed from workload
+execution to monitored evidence, collective alert and measured container
+resources.
 
 \section{Evaluation Objectives and Experimental Protocol}
 \label{sec:evaluation-objectives-protocol}
 
-The evaluation addresses three questions. 
+The evaluation addresses three questions:
 \begin{itemize}
     \item Can the monitoring agent observe security-relevant activity generated inside 
     another container when the Pod does not share its process namespace with the host?
@@ -23,55 +20,54 @@ The evaluation addresses three questions.
     charged to the monitor container during the attack workload?
 \end{itemize}
 
-Two campaigns were conducted. The functional campaign comprised three benign
-windows and four exploit windows. Each window had a distinct run identifier and
-preserved the trigger output, standard error and time-bounded container logs.
-The performance campaign comprised five rounds, each containing a filtered
-monitor profile, an unfiltered monitor profile and a profile without the
-monitor. The starting profile was shifted between rounds, giving fifteen runs
-in a cyclic order. The Pod was recreated and allowed to become ready before
-each run.
+The three questions use different evidence boundaries. Cross-container
+visibility is established from decoded records carrying both container and host
+process identities. Detector behaviour is assessed from the ordered evidence
+inside each alert and from the absence of alerts in the selected benign
+windows. Resource use is measured independently through cgroup and node
+counters. Keeping these observations separate avoids treating successful
+collection, a detector match and application-level exploit output as the same
+experimental outcome.
 
-The performance protocol used a ten-second warm-up and then selected samples
-whose endpoint timestamps fell within the externally recorded workload
-interval. The sampling period was nominally one second, although reads performed
-through the Minikube \gls{ssh} path introduced some interval variation. A project
-acceptance gate of 5\% was applied to the mean \gls{cpu} time charged to the monitor cgroup,
-expressed as a percentage of one core. This gate is local to the project and is
-not a claim about total host overhead. Results are reported descriptively using
-the five run means per profile; the sample standard deviation describes
-variation among those runs rather than a wider population.
+The functional campaign used three benign and four exploit windows. Each had a
+distinct run identifier and retained trigger output, standard error and
+time-bounded container logs. The performance campaign used five rounds of
+three profiles: filtered monitor, unfiltered monitor and no monitor. The
+starting profile shifted between rounds, producing fifteen cyclically ordered
+runs. The Pod was recreated and allowed to become ready before each run.
 
-The experimental input was the scenario executed by the trigger together with
-the selected monitoring profile. The main dependent observations were the
-event evidence and alert count in the functional campaign, and cgroup CPU,
-memory, \gls{rss}, PID count, node CPU and workload duration in the performance
-campaign. The protocol was designed to hold the host, cluster allocation,
-target images, policy, detector and synthetic flag fixed. Run identifiers and
-\gls{utc} window boundaries tied
-the scenario output to the corresponding monitor log, preventing alerts from
-earlier activity in the accumulated container log from being counted in a
-later run.
+After a ten-second warm-up, the protocol selected samples whose endpoint fell
+inside the externally recorded workload interval. Sampling was nominally once
+per second, with some variation from reads through Minikube \gls{ssh}. The local
+acceptance gate was 5\% of one core for mean \gls{cpu} time charged to the monitor
+cgroup; it does not represent total host overhead. Results use the five run
+means per profile, with sample standard deviation describing only variation
+among those runs.
+
+Experimental inputs were the trigger scenario and selected monitor profile.
+The functional campaign recorded event evidence and alert counts; the
+performance campaign recorded cgroup CPU, memory, \gls{rss}, PID count, node CPU
+and workload duration. Host, cluster allocation, images, policy, detector and
+synthetic flag were held fixed. Run identifiers and \gls{utc} boundaries linked
+scenario output to the relevant log window, excluding older alerts from later
+runs.
 
 \section{Experimental Testbed}
 \label{sec:evaluation-testbed}
 
-Laboratory records identify the host as Rocky Linux 8.10 with kernel
-\path{4.18.0-553.137.1.el8_10.x86_64}. This is a later patch-level build in the
-same Rocky Linux 8.10 kernel stream as the implementation baseline used during
-development. The recorded Minikube v1.38.1 configuration created one node with
-the Docker driver, two requested CPUs and 4096~MiB of memory
+The laboratory host ran Rocky Linux 8.10 with kernel
+\path{4.18.0-553.137.1.el8_10.x86_64}, a later patch-level build in the same
+kernel stream as the development baseline. Minikube v1.38.1 created one node
+through the Docker driver with two requested CPUs and 4096~MiB of memory
 \cite{minikube_docker_driver}. The archived Kubernetes output independently
-confirms server version v1.30.0. No evaluation claim depends on functionality
-introduced after the implementation baseline.
+records server version v1.30.0. No result depends on functionality introduced
+after the development baseline.
 
-The testbed used a single Pod named \texttt{aes-beta-lab} containing three
-containers. The target exposed the vulnerable service, the trigger generated
-benign or exploit inputs, and the monitor ran the proposed tool. The trigger reached
-the target through the Pod-local loopback address on port 1337. The applied Pod
-set \texttt{hostPID}, \texttt{hostNetwork} and
-\texttt{shareProcessNamespace} to false. The target and trigger consequently
-shared the Pod network but did not share one process namespace
+The \texttt{aes-beta-lab} Pod contained a vulnerable target, an input trigger
+and the monitor. The trigger contacted the target over Pod-local loopback on
+port 1337. \texttt{hostPID}, \texttt{hostNetwork} and
+\texttt{shareProcessNamespace} were false, so target and trigger shared the Pod
+network but not a process namespace
 \cite{kubernetes_pod_networking,kubernetes_process_namespace}.
 
 \begin{figure}[H]
@@ -86,14 +82,14 @@ shared the Pod network but did not share one process namespace
     \label{fig:evaluation-kubernetes-testbed}
 \end{figure}
 
-Figure~\ref{tab:evaluation-environment} provides the corresponding configuration
-details. The target ran as \gls{uid} and group identifier 10001, while the trigger used
+Table~\ref{tab:evaluation-environment} provides the corresponding configuration
+details. The target ran as \gls{uid} and group identifier 10001; the trigger used
 10002. Both were non-root, had privilege escalation disabled, used read-only
 root filesystems and dropped all Linux capabilities. The monitor ran as root in
 a privileged container with an unconfined seccomp profile. It mounted host BTF
-read-only and the host \gls{bpf} and tracing filesystems read-write. These permissions
-were required by the laboratory configuration and must not be interpreted as a
-least-privilege deployment result \cite{kubernetes_privileged_containers}.
+read-only and the host \gls{bpf} and tracing filesystems read-write. These
+permissions were required by the laboratory and do not represent a
+least-privilege deployment \cite{kubernetes_privileged_containers}.
 The default service-account token also remained mounted, although no evaluated
 scenario depended on Kubernetes \gls{api} access.
 
@@ -126,61 +122,49 @@ scenario depended on Kubernetes \gls{api} access.
     \label{tab:evaluation-environment}
 \end{table}
 
-The public challenge revision was recorded before image construction, and the
+Before image construction, the public challenge revision was recorded and the
 binary, dynamic loader and C library were checked against fixed hashes. The
-preparation script verifies these artefacts but does not independently assert
-the Git revision of the source checkout. The applied Pod and the policy and
-detector documents were preserved with configuration hashes for the functional
-campaign, while the running Pod record retained the three image identities. The
-flag was a synthetic value created for the thesis experiment rather than a
-competition secret. Full hashes, image identifiers, manifests and commands
-remain in the reproducibility material rather than in the chapter body.
+preparation script verifies these artefacts, though not the Git revision of the
+source checkout. The applied Pod, policy and detector were preserved with
+configuration hashes, and the running Pod record retained all three image
+identities. The flag was synthetic rather than a competition secret. Full
+hashes, manifests, commands and image identifiers remain in the reproducibility
+material.
 
-The Pod specifications declared resource requests but no container limits.
-Consequently, the measurements describe actual use under contention on the
-two-core Minikube node rather than enforcement at a fixed container ceiling.
-The requested node size is preserved by the cluster-start command; a separate
-snapshot of realised Kubernetes allocatable capacity was not archived. This
-preservation gap is considered again in the validity analysis.
+The Pod declared resource requests but no limits. Measurements therefore
+describe use under contention on the two-core node, not enforcement at a fixed
+container ceiling. The cluster-start command preserves the requested node size,
+but no snapshot of realised Kubernetes allocatable capacity was archived.
 
 \section{Controlled AES-beta Scenario}
 \label{sec:evaluation-workload}
 
-AES-beta is a public Capture the Flag challenge adapted here as a controlled
-process-monitoring workload. The target service receives requests over the
-Pod-local connection. A benign run exercises the service without attempting to
-read the mounted flag. An exploit run drives the vulnerable service until the
-target process invokes a shell, executes \texttt{cat} and attempts to read the
-flag at \path{/opt/aes-beta/flag}. The exploit implementation and payload
-construction are not evaluation variables; the relevant input is the resulting
-host behaviour \cite{openecsc2024_aes_beta}.
+AES-beta is a public Capture the Flag challenge adapted as a controlled
+process-monitoring workload \cite{openecsc2024_aes_beta}. Benign runs exercised
+the service without reading the mounted flag. Exploit runs drove the target to
+invoke a shell, execute \texttt{cat} and access
+\path{/opt/aes-beta/flag}. Payload construction was fixed; the experiment
+examined the resulting host behaviour.
 
-The policy admitted only the three logical events required by the experiment.
-The detector then required four ordered observations for UID 10001 within a
-five-second window. The first two were successful executable transitions to
-\path{/bin/sh} and \path{/bin/cat}. The third was
-\texttt{security\_file\_open} for the resolved flag path. This event shows that
-the resolved file reached the Linux security mediation stage, but it does not
-by itself establish that access succeeded. The fourth was an \texttt{open}
-event for the caller pathname \texttt{flag} with a non-negative return value,
-which supplied the syscall-boundary success evidence.
+The policy admitted three logical events. The detector required four ordered
+observations from UID 10001 within five seconds: successful transitions to
+\path{/bin/sh} and \path{/bin/cat}, a \texttt{security\_file\_open} observation
+for the resolved flag path, and an \texttt{open} event for caller pathname
+\texttt{flag} with a non-negative return. The security hook showed mediation;
+the returned file descriptor supplied success evidence at the syscall
+boundary.
 
-The sequence used the local \texttt{process\_tree} correlation strategy. In the
-observed alerts, all four records shared one host \gls{pid}; the experiment
-therefore exercised the same-process branch of that strategy. It did not
-independently test correlation from a parent process to its immediate child.
-The resulting alert carried high severity and the ATT\&CK identifiers TA0002,
-TA0009, T1059.004 and T1005. These identifiers classify the intended meaning of
-the observed sequence in the standard \gls{attack} vocabulary
-\cite{strom2020attack}; they are not evidence of detector correctness or
-technique coverage.
+The sequence used \texttt{process\_tree} correlation. All four records in each
+alert shared one host \gls{pid}, so this experiment exercised its same-process
+branch, not parent-to-child correlation. Alerts carried high severity and
+ATT\&CK identifiers TA0002, TA0009, T1059.004 and T1005. These classify the
+sequence in the \gls{attack} vocabulary \cite{strom2020attack}; they do not
+measure detector coverage.
 
-This scenario creates an interpretable boundary between controlled application
-input and observable host effects. Unlike direct invocation of the monitored
-commands, it requires the evidence to originate from the vulnerable target
-service rather than from the trigger container. The challenge artefacts and
-runtime dependencies were fixed for the experiment, and the success condition
-used a synthetic value whose disclosure has no operational consequence.
+Unlike direct invocation of the monitored commands, this scenario required the
+evidence to originate from the vulnerable service rather than the trigger.
+Challenge artefacts and runtime dependencies were fixed, and success used a
+synthetic value with no operational consequence.
 
 \section{Functional Evaluation}
 \label{sec:evaluation-functional}
@@ -188,56 +172,43 @@ used a synthetic value whose disclosure has no operational consequence.
 \subsection{Cross-Container Event Visibility}
 \label{subsec:evaluation-cross-container-visibility}
 
-The initial visibility test captured a wider stream of 7,289 records and then
-isolated the nine records whose process UID was 10001. Those records described
-a directly invoked \texttt{cat} operation in the target container, including
-the executable transition, resolved flag object and successful file-open
-result. The process had container PID 327 and host PID 3016236. The monitor
-therefore retained both the namespace-relative identity reported inside the
-target and the host identity needed for node-local correlation.
+The visibility test captured 7,289 records, of which nine had process UID
+10001. They described a directly invoked \texttt{cat} in the target container,
+including executable transition, resolved flag object and successful open. The
+process had container PID 327 and host PID 3016236, preserving both its
+namespace-relative and node-local identities.
 
-This result demonstrates that the privileged monitor observed target-container
-activity despite \texttt{hostPID: false} and without a shared Pod process
-namespace. The scope is deliberately narrow: all containers ran on one
-Minikube node and shared its kernel. The result does not establish visibility
-across nodes or cluster-wide correlation.
+This confirms visibility into the target container with \texttt{hostPID: false}
+and no shared Pod process namespace. All containers still ran on one Minikube
+node and shared its kernel; cross-node visibility was not tested.
 
 \subsection{Collective Detector Validation}
 \label{subsec:evaluation-collective-detector}
 
-Every exploit window produced one alert containing the configured four-event
-sequence. In the first run, the two executable transitions identified
-\path{/bin/sh} and \path{/bin/cat}; the mediation event then identified the
-resolved flag object, and the final \texttt{open} event returned descriptor 2.
-The latter supplied the syscall-boundary success evidence that the LSM event
-alone could not provide.
+Each exploit window produced one four-event alert. In the first run, executable
+transitions identified \path{/bin/sh} and \path{/bin/cat}, the mediation event
+identified the resolved flag object, and the final \texttt{open} returned file
+descriptor 2. That return supplied the success evidence absent from the LSM
+entry observation.
 
-The first and last event timestamps were separated by 0.941, 0.625, 0.650 and
-0.725~ms in the four exploit windows. These intervals show that the four
-observations fell well inside the configured five-second sequence window. They
-must not be interpreted as detector latency or end-to-end alert-delivery time,
-because they measure only the span between kernel event timestamps. Each alert
-also retained a single unique host PID across its evidence, confirming the
-local same-process correlation used in this scenario.
+The first-to-last event spans were 0.941, 0.625, 0.650 and 0.725~ms, all inside
+the five-second window. These are differences between kernel timestamps, not
+detector or delivery latency. Every alert retained one host PID across its
+evidence, confirming same-process correlation in this scenario.
 
-The monitor and the exploit client observed related but distinct outcomes. The
-alert demonstrates that the shell and \texttt{cat} transitions occurred and
-that the flag file was successfully opened. It does not demonstrate that the
-file contents were returned through the service and received by the trigger.
-This distinction became visible in the third exploit run, where the detector
-completed the same four-event sequence but the client received an empty flag
-value and exited with status 1.
+The monitor and exploit client observed different stages. The alert establishes
+the shell and \texttt{cat} transitions and a successful open, not delivery of
+file contents to the trigger. In E3 the sequence completed, but the client
+received an empty flag value and exited with status 1.
 
 \subsection{Benign Control and Repeated Runs}
 \label{subsec:evaluation-functional-repetitions}
 
-Table~\ref{tab:evaluation-functional-runs} reports the seven time-bounded
-functional windows. The three benign interactions completed successfully and
-produced no detector alert. The four exploit interactions each produced one
-alert with four evidence events. Three returned the synthetic flag to the
-client; E3 did not. No matching perf-loss diagnostic appeared in any selected
-window. This means only that the implemented diagnostic path reported no loss
-condition; it is not proof that transport was loss-free.
+Table~\ref{tab:evaluation-functional-runs} reports the seven functional
+windows. Three benign interactions completed without an alert. All four
+exploit interactions produced one four-event alert, although only three
+returned the synthetic flag to the client. No selected window contained a
+perf-loss diagnostic; this is not independent proof of loss-free transport.
 
 \begin{table}[H]
     \centering
@@ -264,13 +235,11 @@ condition; it is not proof that transport was loss-free.
     \label{tab:evaluation-functional-runs}
 \end{table}
 
-The observations support a bounded functional conclusion: the implemented
-pipeline collected the selected target-container events and completed the
-configured collective sequence in these four controlled exploit windows,
-while the three selected benign interactions did not complete it. They do not
-support a detection-accuracy percentage. The detector was constructed for this
-known scenario, the benign workload was narrow and no independent holdout set
-was evaluated.
+Within these runs, the pipeline collected the selected target-container events
+and completed the collective sequence in all four exploit windows, but not in
+the three benign windows. This is not a detection-accuracy estimate: the
+detector targeted a known scenario, the benign control was narrow and no
+independent holdout set was used.
 
 \section{Performance Evaluation}
 \label{sec:evaluation-performance}
@@ -278,40 +247,43 @@ was evaluated.
 \subsection{Metrics, Sampling and Benchmark Profiles}
 \label{subsec:evaluation-performance-method}
 
-The filtered profile ran the monitor with the exact UID 10001 kernel filter.
-The unfiltered profile used the same policy, detector, alert mode and workload
-without that filter. The no-monitor profile removed the monitor container and
-served only as context for the target workload. Before every run, the Pod was
-deleted, recreated under the selected profile and allowed to reach readiness.
-The order was rotated over five rounds rather than randomised.
+The filtered profile enabled the exact UID 10001 kernel filter. The unfiltered
+profile kept the same policy, detector, alert mode and workload without that
+filter. The no-monitor profile removed the monitor container and provided only
+workload context. Before each run, the Pod was recreated under the selected
+profile and allowed to reach readiness. Profile order rotated over five rounds
+rather than being randomised.
 
-The filtered and unfiltered profiles preserved the same event policy, detector,
-alert-only output and exploit workload. Their intended independent variable was
-therefore the exact kernel-side UID admission setting. The no-monitor profile
-changed a broader part of the Pod by removing the monitor container and its host
-mounts. It was retained to show the scale and variability of the target
-workload, not as an otherwise identical control for causal overhead estimation.
+Filtered and unfiltered runs differed by the intended kernel-side UID setting.
+Removing the monitor also removed its host mounts, so the no-monitor profile was
+not an otherwise identical overhead control. It was retained to show target
+workload scale and variability.
 
-Container CPU was calculated from cgroup-v1 \texttt{cpuacct.usage} deltas,
-which report accumulated cgroup CPU time in nanoseconds, divided by wall-clock
-deltas \cite{linux_cgroup_v1_cpuacct}. A value of 100\% represents one fully used core.
-Node CPU was derived from \path{/proc/stat} and used the complete two-core node
-as its 0--100\% scale. Cgroup memory usage and resident set size (\gls{rss}) were
-collected separately because they describe different boundaries: cgroup memory
-can include charged pages beyond the resident process set. PID counts and the
-workload's internal duration were also preserved.
+The primary performance comparison is therefore between the two monitored
+profiles. Both execute the same target workload and user-space detector path;
+the intended difference is whether unrelated UIDs are rejected in the common
+kernel initialisation path. This comparison measures work charged to the
+monitor container after that change. The no-monitor profile cannot answer the
+same question, but it helps show whether the target workload and node were
+stable enough to interpret the monitored runs.
 
-For filtered and unfiltered runs, the primary cgroup belonged to the monitor
-and the target was sampled as a secondary container. In the no-monitor profile,
-the primary cgroup necessarily belonged to the target. Its CPU and memory
-columns therefore cannot be compared directly with the monitor columns or
-subtracted as a baseline for monitor overhead.
+Container CPU divided cgroup-v1 \texttt{cpuacct.usage} deltas by wall-clock
+deltas \cite{linux_cgroup_v1_cpuacct}; 100\% represents one fully used core.
+Node CPU came from \path{/proc/stat}, with the complete two-core node mapped to
+0--100\%. Cgroup memory and resident set size (\gls{rss}) were recorded
+separately because charged pages may extend beyond the resident process set.
+PID count and internal workload duration were also retained.
+
+In monitored runs, the primary cgroup belonged to the monitor and the target
+was sampled separately. Without the monitor, the primary cgroup belonged to the
+target. Its CPU and memory cannot be subtracted from the monitor columns as an
+overhead baseline.
 
 \subsection{Resource Consumption and Workload Duration}
 \label{subsec:evaluation-resource-results}
 
-Table~\ref{tab:evaluation-performance-results} contains the replicated summary.
-Each CPU mean and standard deviation was calculated over five per-run means.
+Table~\ref{tab:evaluation-performance-results} summarises the replicas. Each CPU
+mean and standard deviation uses five per-run means.
 The filtered monitor used 0.39\% of one core on average, with a sample standard
 deviation of 0.02 percentage points. The unfiltered monitor used 4.87\% on
 average with a standard deviation of 0.11. The mean of each run's 95th
@@ -349,131 +321,103 @@ monitor; the largest individual samples were 1.32\% and 9.27\%, respectively.
     \label{tab:evaluation-performance-results}
 \end{table}
 
-The maximum cgroup memory attributed to the monitor was 100.51~MiB when
-filtered and 112.16~MiB when unfiltered; maximum \gls{rss} was 39.36 and 46.02~MiB.
-These maxima describe the resources observed in this campaign rather than a
-steady-state requirement. The no-monitor memory values belong to the target and
-are included only to characterise the workload context.
+Maximum monitor cgroup memory was 100.51~MiB when filtered and 112.16~MiB when
+unfiltered; maximum \gls{rss} was 39.36 and 46.02~MiB. These are campaign maxima,
+not steady-state requirements. No-monitor memory belongs to the target and is
+included only as workload context.
 
-Mean node CPU remained close to saturation in every profile: 94.70\% for
-filtered, 95.11\% for unfiltered and 94.89\% without the monitor. Workload
-duration also varied among repetitions. Although the filtered mean duration was
-shorter than the unfiltered mean, the small sample, changing workload cost and
-high node utilisation prevent a causal interpretation. The experiment therefore
-does not use duration differences to estimate monitor overhead.
+Mean node CPU was near saturation in every profile: 94.70\% filtered, 95.11\%
+unfiltered and 94.89\% without the monitor. Workload duration varied between
+replicas. The small sample, variable workload cost and high utilisation prevent
+interpreting the shorter filtered mean as a monitor effect.
 
 \subsection{Observed Difference with Kernel-Side UID Filtering}
 \label{subsec:evaluation-uid-filter}
 
-All five filtered monitor run means fell below the project-defined 5\% gate,
+All five filtered run means fell below the project-defined 5\% gate,
 ranging from 0.36\% to 0.41\% of one core. The five unfiltered means ranged from
 4.73\% to 4.98\%. Under the scripted profiles, enabling exact UID admission was
 associated with a reduction from 4.87\% to 0.39\% of one core, or approximately
-92.0\% relative to the unfiltered mean. Both profiles were repeated in every
-round, but the evidence archive does not retain the rendered monitor
-configuration and image identity for each individual replica. The comparison
-therefore supports a strong association under the intended profiles rather than
-proving that the filter was the sole cause of the difference.
+92.0\% relative to the unfiltered mean. Both profiles appeared in every round,
+but the archive lacks the rendered monitor configuration and image identity for
+each replica. The comparison shows a strong association under the intended
+profiles, not proof that the filter alone caused the difference.
 
-The result remains narrower than a total-overhead statement. Work executed by
-eBPF programs in kernel context is not fully represented by the monitor
-container's cgroup charge, and the experiment did not isolate host-level kernel
-cost. The 5\% result therefore applies to measured monitor-cgroup CPU in the
-filtered profile, not to the complete system cost of monitoring.
+Kernel execution is not fully represented by the monitor cgroup, and host-level
+kernel cost was not isolated. The 5\% result applies only to measured
+monitor-cgroup CPU in the filtered profile.
 
-The functional path remained active in the performance campaign. Each of the
-ten monitored runs produced exactly one alert, and none contained a matching
-textual perf-loss diagnostic. This supports the claim that filtering preserved
-the configured scenario evidence in the observed runs. It does not demonstrate
-loss-free transport, because absence of a diagnostic is not an independent
-accounting mechanism for every generated record.
+Each of the ten monitored performance runs still produced one alert, with no
+matching textual perf-loss diagnostic. Thus, the configured evidence remained
+available in these runs; transport loss was not independently measured.
 
 \section{Discussion of Results}
 \label{sec:evaluation-discussion}
 
-The functional and performance campaigns support three complementary findings.
-First, the monitor observed process and file activity produced in the target
-container while host PID sharing was disabled at the Pod level. Host process
-identity allowed the evidence to be related locally without presenting the
-container PID as a global identity. Second, the detector retained the semantic
-distinction between executable-transition evidence, file-security mediation and
-the successful file-open result. This produced one ordered alert in every
-exploit window and avoided interpreting the LSM observation alone as a completed
-access.
+The monitor observed target-container process and file activity while host PID
+sharing was disabled for the Pod. Host process identity supported local
+correlation without treating the container PID as global. The detector also
+kept executable transition, file-security mediation and successful open as
+separate evidence, producing one ordered alert per exploit window without
+treating the LSM observation alone as completed access.
 
-Third, the scripted profile with early UID admission was associated with
-substantially less work charged to the monitor cgroup. The approximately 92.0\%
-difference is consistent with the intended benefit of rejecting unrelated
-events before transport and user-space processing. However, incomplete per-run
-configuration provenance and near-saturated node utilisation prevent a stronger
-causal claim or an extension to total overhead and workload acceleration.
+Early UID admission was associated with substantially less work charged to the
+monitor cgroup. The approximately 92.0\% difference is consistent with rejecting
+unrelated events before transport and user-space processing. Incomplete
+per-run configuration provenance and near-saturated node utilisation prevent a
+stronger causal or total-overhead claim.
 
-The divergent third exploit run also clarifies the monitor's evidence boundary.
-The alert correctly represented the host operations it was designed to observe,
-including a successful file descriptor return. The empty client result belonged
-to a later application and communication outcome outside the detector sequence.
-This is not a contradiction between client and monitor; it demonstrates why
-observed kernel evidence and end-to-end application success must be reported
-separately.
+E3 illustrates the evidence boundary directly. Its alert represented the
+observed host operations, including a successful file descriptor return; the
+empty client result arose later, outside the detector sequence. Kernel evidence
+and end-to-end application success must therefore be reported separately.
 
 \section{Threats to Validity and Current Limitations}
 \label{sec:evaluation-threats-validity}
 
 \noindent\textbf{Internal validity.}
-The performance profiles were rotated cyclically rather than randomly assigned.
-Recreating the Pod reduced carry-over of container state, but did not remove
-host load, cache effects or variation in exploit execution. Sampling through
-the Minikube \gls{ssh} path produced intervals longer than the nominal one second.
-Because a sample was selected by its endpoint timestamp while its CPU value
-covered the preceding interval, the first selected sample could include some
-pre-workload activity and the final partial interval could be omitted. The
-node was close to saturation in all profiles. In the functional campaign, E3
-also showed that client output could fail despite completion of the monitored
-host sequence.
+Profiles rotated cyclically rather than randomly. Pod recreation reduced
+container-state carry-over but not host load, cache effects or exploit
+variation. Minikube \gls{ssh} sampling sometimes exceeded the nominal one-second
+period. Selection used each sample's endpoint although its CPU value covered
+the preceding interval, so the first sample may include pre-workload activity
+and the final partial interval may be absent. The node was near saturation in
+all profiles. E3 also showed that client output can fail after the monitored
+host sequence completes.
 
 \medskip
 \noindent\textbf{Construct validity.}
-CPU charged to the monitor cgroup is not equivalent to total monitoring
-overhead, and target metrics from the no-monitor profile are not a monitor
-baseline. Cgroup memory and \gls{rss} cover different resources. Event timestamp
-spans do not measure detector or output latency. Likewise, the absence of a
-loss diagnostic does not prove loss-free perf-buffer transport. The functional
-interpretation also depends on preserving the difference between an LSM
-mediation event and the successful syscall return.
+Monitor-cgroup CPU is not total monitoring overhead, and no-monitor target
+metrics are not a monitor baseline. Cgroup memory and \gls{rss} cover different
+boundaries; event timestamp spans are not detector or output latency; absence
+of a loss diagnostic is not proof of loss-free transport. Functional results
+also depend on distinguishing LSM mediation from the returned syscall result.
 
 \medskip
 \noindent\textbf{External validity.}
-The experiment used one Rocky Linux kernel build, one Docker-backed Minikube
-node, one Kubernetes version, one public \gls{ctf} challenge and one detector tailored
-to that challenge. The benign interaction represented only a narrow control.
-No alternative kernels, long-duration workloads, multi-node deployments or
-production workload mixtures were evaluated. The results therefore describe
-the tested node-local scenario and should not be generalised to arbitrary
-container environments.
+The experiment covered one Rocky Linux build, one Docker-backed Minikube node,
+one Kubernetes version, one public \gls{ctf} challenge and a detector tailored
+to it. The benign control was narrow. Alternative kernels, long-running or
+production workloads and multi-node deployments were not evaluated, so the
+results apply to this node-local scenario.
 
 \medskip
 \noindent\textbf{Conclusion validity.}
-Five repetitions per performance profile and seven functional windows support
-descriptive comparisons, not inferential statistics or accuracy rates. The
-approximately 92.0\% profile difference applies to the selected event scope,
-UID and workload on the observed node. The per-run performance archive does not
-retain every rendered monitor configuration and image identity, so it cannot
-independently establish that the UID filter was the only realised difference.
-Differences in target CPU, memory or duration likewise do not establish a
-causal performance effect. ATT\&CK metadata provides alert classification and
-does not validate detector coverage.
+Five replicas per performance profile and seven functional windows support
+descriptive comparison, not inferential statistics or accuracy rates. The
+92.0\% difference is specific to the selected events, UID, workload and node.
+Missing per-run rendered configuration and image identity prevent independent
+confirmation that filtering was the only realised difference. Target CPU,
+memory and duration differences are not causal performance evidence. ATT\&CK
+metadata classifies alerts but does not validate coverage.
 
 \section{Evaluation Summary}
 \label{sec:evaluation-summary}
 
-The experiment demonstrated node-local observation of target-container process
-and file activity, completion of the configured four-event collective sequence
-in four controlled exploit windows, and no alert in three selected benign
-windows. Under the scripted performance profiles, exact UID filtering was
-associated with an approximately 92.0\% lower mean CPU charge than the
-unfiltered profile, with all five filtered run means below the local 5\% gate.
-These findings validate the intended workflow within the stated environment
-while leaving total overhead, broad detection accuracy and multi-node behaviour
-outside the supported claims.
-Chapter~7 uses these bounded results to draw the final conclusions and identify
-future work.
+The monitor observed node-local target-container activity and completed the
+four-event sequence in all four exploit windows, with no alert in the three
+benign windows. Exact UID filtering was associated with an approximately
+92.0\% lower mean monitor-cgroup CPU charge; all five filtered means remained
+below the local 5\% gate. Total overhead, broad detection accuracy and
+multi-node behaviour were not established. Chapter~7 draws conclusions from
+these bounded results and identifies future work.

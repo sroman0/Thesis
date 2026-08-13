@@ -4,20 +4,18 @@
 \section{Linux Kernel Observability}
 \label{sec:linux-kernel-observability}
 
-Runtime monitoring requires evidence about operations while they are being
-executed. Application logs describe domain-specific actions, but their content
-depends on what each application chooses to record. The Linux kernel offers a
-complementary observation layer because it mediates process creation,
-credential changes, file access, memory management, inter-process
-communication, and other security-relevant operations. Kernel observability is
-therefore useful when behaviour crosses application boundaries or is not
-represented consistently in application logs
+Application logs provide valuable domain-specific information, but only for
+actions that the application was designed to record. The kernel provides a
+different view. Process creation, credential changes, file access, memory
+management and inter-process communication all pass through it, including
+operations that span applications or are absent from their logs. Observing
+these operations while they occur supplies the evidence needed for runtime
+monitoring
 \cite{linux_tracing_index,gbadamosi2024ebpf}.
 
-Linux does not expose all runtime activity through one universal event source.
-Instead, it provides instrumentation points at different layers of kernel
-execution. Each mechanism determines when monitoring code runs, which context
-is available, and how strongly the observation depends on kernel internals.
+There is no universal kernel event source. Linux instead exposes instrumentation
+points at several stages of execution, each with its own timing, context and
+dependence on implementation details.
 
 \medskip
 \noindent\textbf{System-call observation.}
@@ -44,16 +42,12 @@ and attached to the selected tracepoint. Each time kernel execution reaches
 that point, the kernel invokes the attached program and provides a
 tracepoint-specific context containing the declared event fields.
 
-A regular tracepoint gives the eBPF program a structured event context whose
-layout follows the format exported for that tracepoint. A raw tracepoint refers
-to the same underlying kernel instrumentation site, but exposes the original
-arguments passed by the kernel to that site with less intermediate
-transformation. This reduces preparation performed before the eBPF program
-runs, while requiring the program to know how each raw argument must be
-interpreted. Tracepoints are therefore explicit and comparatively stable
-observation points, whereas raw tracepoints trade some of that abstraction for
-more direct access to the underlying arguments. Both mechanisms are limited to
-the tracepoints actually provided by the target kernel
+A regular tracepoint supplies a structured context whose layout follows the
+format exported for that event. A raw tracepoint uses the same underlying
+instrumentation site but exposes its original kernel arguments with less
+intermediate transformation. The latter reduces preparation before the eBPF
+program runs, at the cost of requiring kernel-aware argument decoding. Both
+forms remain limited to the tracepoints provided by the target kernel
 \cite{linux_tracepoints,linux_libbpf_program_types}.
 
 \medskip
@@ -80,12 +74,12 @@ result are required in one logical event, the monitoring system must save the
 entry data and correlate it with the return observation, commonly by using the
 current thread identity.
 
-Kprobes and kretprobes provide access to functions for which no tracepoint
-exists, but this flexibility increases coupling to kernel implementation
-details. A renamed or inlined function, a changed signature, a different
-calling convention, or an unavailable symbol can invalidate the attachment or
-the argument-decoding logic. They are therefore powerful dynamic mechanisms,
-but generally require more target-specific validation than tracepoints
+Kprobes and kretprobes reach functions for which no tracepoint exists, but this
+flexibility increases coupling to the kernel implementation. A renamed or
+inlined function, a changed signature, a different calling convention or an
+unavailable symbol can invalidate either attachment or argument decoding.
+Dynamic probes consequently require more target-specific validation than
+tracepoints
 \cite{linux_kprobes}.
 
 \medskip
@@ -94,15 +88,14 @@ The \gls{lsm} framework inserts security mediation points into kernel
 operations involving files, credentials, processes, sockets, and other
 protected objects. At these points, registered security modules can inspect an
 operation and, for hooks with authorisation semantics, permit or reject it.
-Observing an LSM-related function can therefore expose a resolved kernel object
-and the security-relevant stage of an operation, rather than only the original
-system-call request. Two concepts should not be confused: an LSM hook is the
-kernel mediation point, while an eBPF LSM program is one possible program type
-for attaching logic to supported hooks. On kernels where that program type is
-unavailable or unsuitable, monitoring tools may instead observe the
-corresponding security function through a kprobe. An entry-side observation
-still does not necessarily reveal the final outcome; when the result matters,
-it must be obtained from a compatible return-side observation
+An LSM-related function can expose a resolved kernel object at a
+security-relevant stage of an operation, rather than only the original
+system-call request. Here, the hook and the attached program are distinct: the
+LSM hook is the kernel mediation point, while an eBPF LSM program is one means
+of attaching logic to a supported hook. If that program type is unavailable or
+unsuitable, a monitor may observe the corresponding security function with a
+kprobe. Entry-side observation alone does not necessarily reveal the final
+outcome; a compatible return-side probe is needed when that result matters
 \cite{linux_lsm_development,linux_libbpf_program_types,linux_kprobes}.
 
 \begin{table}[H]
@@ -160,42 +153,32 @@ it must be obtained from a compatible return-side observation
 
 \medskip
 \noindent\textbf{The role of eBPF.}
-eBPF is the execution facility attached to an observation point, not a
-replacement name for the observation point itself. The selected hook causes an
-eBPF program to run and determines the context received by that program. The
-program can then extract selected fields, apply an early filter, update maps,
-or submit an event to user space. Consequently, ``tracepoint'', ``kprobe'',
-``LSM hook'', and ``eBPF program'' describe different parts of the same
-monitoring path \cite{linux2024ebpfuserspaceapi,linux_libbpf_program_types}.
+eBPF is the execution facility attached to an observation point, not another
+name for the point itself. The hook determines when the program runs and which
+context it receives. The program can then extract fields, filter an observation,
+update a map or submit an event to user space. Thus, ``tracepoint'', ``kprobe'',
+``LSM hook'' and ``eBPF program'' refer to different parts of the monitoring
+path \cite{linux2024ebpfuserspaceapi,linux_libbpf_program_types}.
 
-These mechanisms are complementary. System-call observations describe requests
-and results at the user--kernel boundary; general tracepoints expose
-kernel-defined events; kprobes and kretprobes provide dynamic access to
-function entry and return; and LSM-related hooks expose security mediation
-points. A runtime monitor combines them according to the required semantics,
-available target-kernel features, and acceptable coupling to kernel internals.
-The engineering objective is to select observation points that provide sufficient and
-reliable evidence for the intended security analysis
+Choosing among these sources depends on the evidence required, the facilities
+available on the target kernel and the acceptable coupling to kernel internals.
+In practice, a monitor often combines them because no single source exposes
+every stage of an operation
 \cite{linux_tracing_index,her2025ebpfsecuritytools}.
 
 \section{eBPF Fundamentals}
 \label{sec:ebpf-fundamentals}
 
-\gls{ebpf} is a modern technology that makes the Linux kernel programmable at
-runtime. It allows small programs to be loaded from user space and executed
-inside the kernel when a selected event occurs. Before execution, the kernel
-verifies that each program respects the safety constraints associated with its
-program type and intended attachment point
+\gls{ebpf} allows programs loaded from user space to run inside the Linux
+kernel when a selected event occurs. Each program is constrained by its type
+and attachment point, and the kernel verifies it before execution
 \cite{rfc9669_bpf_isa,linux2024ebpfuserspaceapi}.
 
-This approach makes it possible to extend kernel behaviour without modifying
-the kernel source or developing a traditional kernel module for each new
-functionality. eBPF programs can be loaded, replaced, and specialised for
-different purposes, including system observability, performance analysis,
-network processing, and security. Its principal benefit is therefore
-controlled programmability: functionality can be introduced close to the
-kernel operations of interest while remaining subject to verification and
-well-defined execution constraints
+This mechanism extends kernel behaviour without requiring a source change or a
+traditional module for every use case. Programs can be loaded, replaced and
+specialised for observability, performance analysis, networking or security.
+Their value lies in placing purpose-built logic close to the relevant kernel
+operation while retaining a defined execution model and a verification step
 \cite{gbadamosi2024ebpf,linux2026ebpfverifier}.
 
 \subsection{Execution Model, Verifier and JIT Compilation}
@@ -209,16 +192,11 @@ program does not execute as unrestricted kernel code: its available context,
 memory accesses, and callable functions depend on its program type
 \cite{rfc9669_bpf_isa,linux_bpf_helpers}.
 
-Because the programs described above are loaded from user space but execute
-inside the kernel, they cannot be allowed to run without first establishing
-that they respect the kernel's safety constraints. An unsafe memory access or
-an invalid operation in this context could affect the stability and security of
-the entire system. Linux addresses this requirement through the eBPF verifier,
-the kernel component responsible for deciding whether a submitted program can
-be accepted for execution. Rather than trusting the program, the verifier
-analyses it during the loading process and before permitting its execution; a
-program that does not satisfy the required safety conditions is rejected and
-never executed.
+Code running in the kernel can affect the stability and security of the whole
+system, even when it was loaded from user space. The eBPF verifier is the kernel
+component that decides whether a submitted program may run. It analyses the
+program during loading and rejects it if the required safety conditions cannot
+be established.
 
 The verifier performs a path-sensitive static analysis of the program's control
 flow. It follows the possible execution paths while tracking the state of
@@ -231,21 +209,18 @@ uses state pruning: when a previously accepted verifier state already covers a
 new state reached at the same instruction, the redundant path does not need to
 be explored again \cite{linux2026ebpfverifier,gershuni2019prevail}.
 
-Verification is a necessary safety gate, not a proof that a program implements
-the intended monitoring semantics. A verifier-accepted program may still read
-the wrong field, emit an incomplete event, or encode data inconsistently with
-its user-space decoder. Conversely, semantically reasonable source code may be
-rejected because the verifier cannot establish the required safety properties
-for a particular kernel. Verifier behaviour is therefore both a security
-mechanism and a practical compatibility constraint
+Verification establishes a set of safety properties, not the correctness of
+the monitoring logic. An accepted program may still read the wrong field, emit
+an incomplete event or disagree with its user-space decoder. Conversely, valid
+source-level logic may be rejected when a particular kernel cannot prove its
+safety. Verifier behaviour is thus both a security boundary and a compatibility
+constraint
 \cite{linux2026ebpfverifier,linux_bpf_design_qa}.
 
-Once the verifier accepts a program, the kernel may pass its eBPF instructions
-to an architecture-specific \gls{jit} compiler. The compiler translates the
-verified eBPF bytecode into native machine instructions for the host
-architecture. The resulting native code can then be executed directly whenever
-the program is invoked, avoiding the overhead of processing the eBPF
-instructions individually at each execution
+After verification, an architecture-specific \gls{jit} compiler may translate
+the eBPF bytecode into native instructions. The kernel can then execute that
+code directly whenever the program is invoked instead of interpreting each
+eBPF instruction in turn
 \cite{linux_bpf_execution_modes,linux_bpf_jit_sysctl}.
 
 \begin{figure}[H]
@@ -263,16 +238,11 @@ instructions individually at each execution
     \label{fig:ebpf-execution-workflow}
 \end{figure}
 
-JIT compilation does not alter the functionality authorised by the verifier.
-The translation is performed only after verification and preserves the
-semantics of the accepted eBPF program. Its availability depends on the host
-architecture, the kernel build configuration, and the runtime JIT settings.
-
-This completes the basic eBPF execution path considered here. A program is
-compiled into eBPF instructions, submitted to the kernel, analysed by the
-verifier and, if accepted, translated into native machine code and executed
-whenever its associated hook or execution context is invoked
-\cite{gbadamosi2024ebpf}.
+JIT compilation takes place only after verification and does not change the
+authorised program semantics. Whether it is available depends on the host
+architecture, kernel configuration and runtime JIT settings. The complete path
+from compilation to invocation is shown in
+Figure~\ref{fig:ebpf-execution-workflow} \cite{gbadamosi2024ebpf}.
 
 \subsection{Object Files, Loading and Attachment Lifecycle}
 \label{subsec:ebpf-object-loading-attachment}
@@ -287,12 +257,11 @@ that must be adapted before the program can be accepted by the target kernel
 \cite{linux_libbpf_program_types,linux_btf,linux_bpf_llvm_relocations}.
 
 A user-space loader, commonly built on \texttt{libbpf}, opens this object and
-turns its declarations into kernel objects. It creates or reuses the required
-maps, resolves relocations and submits each enabled program through the \gls{bpf}
-system-call interface. The kernel then applies the verifier to every submitted
-program. Loading is therefore an active compatibility boundary: a syntactically
-valid object may still fail because a required program type, helper, kernel
-symbol or verifier behaviour is unavailable on the host
+turns its declarations into kernel objects. It creates or reuses maps, resolves
+relocations and submits each enabled program through the \gls{bpf} system-call
+interface, after which the kernel verifier examines every program. A valid
+object can still fail to load if the host lacks a required program type, helper
+or symbol, or if its verifier handles the program differently
 \cite{linux_bpf_syscall,linux_libbpf_overview,linux2026ebpfverifier}.
 
 Loading and attachment are separate operations. A successfully loaded program
@@ -306,14 +275,12 @@ programs, only a subset of which may be loaded and attached for a particular
 monitoring configuration
 \cite{linux_libbpf_program_types,linux_libbpf_overview}.
 
-File descriptors provide the user-space references through which programs,
-maps and links are configured and eventually released. Closing the final
-reference normally permits the corresponding kernel object to be destroyed,
-whereas pinning can give an object a persistent name in the \gls{bpf} filesystem and
-allow it to outlive the process that created it. Runtime ownership and cleanup
-are consequently part of the operational model, not merely loader
-housekeeping: stale attachments or pinned objects may continue consuming
-kernel resources after the original control path has ended
+Programs, maps and links are configured and released through file descriptors.
+Closing the final reference normally allows the kernel object to be destroyed;
+pinning instead assigns it a persistent name in the \gls{bpf} filesystem, so it
+can outlive the process that created it. Cleanup is therefore part of runtime
+ownership rather than a minor loader concern: stale attachments and pinned
+objects may continue to consume kernel resources
 \cite{linux_bpf_syscall,linux_libbpf_overview}.
 
 \subsection{Hook Selection and Event Semantics}
@@ -336,20 +303,16 @@ return-side observation can instead reveal whether the operation completed
 successfully
 \cite{linux_tracepoints,linux_kprobes,linux_lsm_development}.
 
-These observations represent different stages of the same kernel execution
-path and should therefore be considered complementary rather than
-interchangeable. No single hook necessarily exposes the original request,
-the resolved kernel context, and the final result. A runtime monitor may
-consequently combine multiple event sources and correlate their records
-through process identity and temporal proximity.
+These observations belong to different stages of one kernel execution path.
+No single hook necessarily exposes the original request, resolved kernel
+context and final result, so a monitor may need to correlate records from
+several sources through process identity and time.
 
-Hook selection also introduces a compatibility trade-off. Explicit
-tracepoints provide structured interfaces when the target kernel exports a
-suitable event, whereas dynamic probes offer broader placement flexibility
-but depend more strongly on kernel symbols, function signatures, and calling
-conventions. The appropriate observation point must therefore balance the
-required security semantics with the capabilities and stability of the
-deployment kernel
+Compatibility also affects hook selection. Tracepoints provide structured
+interfaces where the target kernel exports a suitable event. Dynamic probes
+allow more flexible placement but depend more heavily on symbols, signatures
+and calling conventions. The required security evidence must be balanced
+against the capabilities and stability of the deployment kernel
 \cite{linux_tracepoints,linux_kprobes,redhat2025backporting}.
 
 \begin{figure}[H]
@@ -370,13 +333,10 @@ deployment kernel
 \subsection{Maps, Helpers and Kernel-to-Userspace Transport}
 \label{subsec:ebpf-maps-helpers-transport}
 
-The execution of an eBPF program is intentionally constrained and usually
-short-lived. Runtime monitoring, however, requires information to persist
-beyond a single invocation and eventually reach user space, where more complex
-processing can be performed. Linux supports this interaction through
-kernel-managed state and a controlled communication path between eBPF programs
-and the user-space runtime. Maps, helpers, and event buffers form the main
-building blocks of this path
+An eBPF invocation is constrained and usually short-lived, whereas monitoring
+often needs state to survive between invocations and eventually reach user
+space. Maps provide kernel-managed storage, helpers expose selected kernel
+services and event buffers carry records to the user-space runtime
 \cite{linux_bpf_maps,linux_bpf_helpers,linux_perf_ring_buffer,
 linux_bpf_ringbuf}.
 
@@ -389,37 +349,28 @@ program can retain between executions. Accesses performed by eBPF code remain
 subject to verifier validation and to the rules imposed by the selected map
 type \cite{linux_bpf_maps,linux_bpf_syscall}.
 
-Different map organisations serve different ownership patterns. Array maps
-provide fixed indexed storage and are suitable for configuration or bounded
-workspaces. Hash maps associate dynamically selected keys with values and can
-retain state such as entry arguments until a later hook completes an
-operation. Per-CPU variants allocate an independent value for each processor,
-reducing contention when programs update temporary state or counters on a hot
-path. Their values must, however, be combined explicitly when user space needs
-a system-wide result. Shared maps instead require the application to consider
-concurrent access from several CPUs and the atomicity of each update
+Map organisation reflects how the stored state is owned and accessed. Arrays
+offer fixed indexed storage for configuration or bounded workspaces. Hash maps
+use dynamic keys and can retain entry arguments until a later hook completes
+an operation. Per-CPU maps give each processor an independent value, reducing
+contention on frequently updated state or counters, although user space must
+combine those values to obtain a system-wide result. A shared map instead
+requires explicit consideration of concurrent access and update atomicity
 \cite{linux_bpf_maps}.
 
-Maps also form a control channel in the opposite direction. User space can
-populate configuration, selection or lookup data before monitoring begins and
-update supported values while programs are loaded. An eBPF program can then
-consult that state without embedding every operational choice in its
-instructions. This division is central to configurable monitoring: the kernel
-program remains bounded, while user space controls which state it exposes and
-how map contents are interpreted
+The same maps also carry configuration in the opposite direction. User space
+can populate selection or lookup data before monitoring starts and update
+supported values while programs remain loaded. Kernel programs can consult
+this state without encoding every operational choice in their instructions,
+leaving interpretation and configuration under user-space control
 \cite{linux_bpf_maps,linux_bpf_syscall}.
 
-Helpers are kernel-provided functions that extend what an eBPF program can do
-without granting unrestricted access to kernel internals. They expose selected
-services through a controlled interface, allowing the kernel to validate how
-those services are invoked and what data is passed to them. The set of
-available helpers is determined by the program type and by the capabilities of
-the target kernel, so support documented for eBPF in general does not imply
-that the same helper can be used in every execution context. This constraint is
-particularly relevant to this work, which targets Rocky Linux 8.10 with kernel
-\texttt{4.18.0-553.137.1.el8\_10.x86\_64}: helper selection must therefore be
-validated against the capabilities of the deployed kernel and the program type
-used by each probe, rather than inferred solely from current upstream
+Helpers expose selected kernel services without granting programs unrestricted
+access to kernel internals. The verifier checks their arguments and the data
+passed to them. Availability depends on both program type and target-kernel
+capabilities; a helper documented for eBPF in general is not necessarily valid
+in every context. For the Rocky Linux target used here, helper support must be
+checked against the deployed kernel rather than inferred from current upstream
 documentation \cite{linux_bpf_helpers,linux2026ebpfverifier}.
 
 Event transport carries records produced during eBPF execution to user space,
@@ -431,10 +382,9 @@ transport follows a different model: a
 \texttt{BPF\_MAP\_TYPE\_PERF\_EVENT\_ARRAY} directs records to per-CPU perf
 ring buffers, which are consumed independently and can report lost events.
 
-Both mechanisms rely on finite buffer capacity. When kernel-side producers
-generate data faster than user space can consume it, a submission may fail or
-a record may be lost. Event transport must therefore be treated as part of the
-monitor's correctness model rather than as a transparent delivery channel
+Both mechanisms have finite capacity. If kernel-side producers outpace the
+consumer, submission may fail or records may be lost. Transport is therefore
+part of the monitor's correctness model rather than a transparent channel
 \cite{linux_bpf_ringbuf,linux_perf_ring_buffer,linux_bpf_helpers}.
 
 \begin{table}[H]
@@ -476,27 +426,24 @@ monitor's correctness model rather than as a transparent delivery channel
 
 \end{table}
 
-Regardless of the selected transport mechanism, kernel and user space must
-share a consistent record format so that the transferred data can be decoded
-into correctly typed events
+In either case, correct decoding depends on a record format shared by kernel
+and user space
 \cite{gbadamosi2024ebpf}.
 
 \subsection{BTF and CO-RE Portability}
 \label{subsec:ebpf-btf-core}
 
-An eBPF program often interacts with kernel data structures whose layout may
-change across kernel versions and distribution builds. A program compiled
-against one specific set of kernel headers may therefore rely on field offsets
-or type definitions that do not match the target system. Portability requires
-a way to preserve the meaning of those accesses while adapting them to the
-types exposed by the deployed kernel. BTF and CO-RE provide the metadata and
-relocation mechanisms used to address this problem.
+Kernel data structures can change layout between versions and distribution
+builds. An eBPF program compiled against one set of headers may therefore use
+field offsets or types that do not match the target. BTF and CO-RE preserve the
+meaning of compatible accesses by describing types and relocating them for the
+deployed kernel.
 
-\gls{btf} represents types and related metadata in a compact format understood
-by the kernel and \gls{bpf} tooling. BTF may describe C types and strings and can also
-carry function, line, and relocation information. When kernel BTF is available,
-loaders and debugging tools can reason about kernel data structures without
-depending solely on a set of headers copied from one kernel build
+\gls{btf} is a compact representation of types and related metadata understood
+by the kernel and \gls{bpf} tooling. It can describe C types and strings as well
+as function, line and relocation information. When the kernel exports BTF,
+loaders and debugging tools need not rely solely on headers copied from one
+build
 \cite{linux_btf}.
 
 \gls{core} uses BTF information to adapt an eBPF program to the kernel on
@@ -504,44 +451,39 @@ which it is loaded. During compilation, Clang stores relocation records that
 describe the kernel types and fields accessed by the program. At load time,
 \texttt{libbpf} reads the BTF information of the running kernel and updates the
 relevant eBPF instructions so that they use the actual layout of those
-structures. As a result, the same compiled object can continue to work when
-compatible kernel versions place a field at a different offset, without
-requiring the program to be recompiled on the monitored system
+structures. The same object can consequently remain usable when a compatible
+kernel places a field at a different offset, without being recompiled on the
+monitored system
 \cite{linux_btf,linux_bpf_llvm_relocations,linux_libbpf_overview}.
 
-In this thesis, this mechanism helps the eBPF programs access kernel structures
-according to the layout exposed by Rocky Linux 8.10 with kernel
+For this prototype, CO-RE adapts accesses to the layouts exposed by Rocky Linux
+8.10 with kernel
 \texttt{4.18.0-553.137.1.el8\_10.x86\_64}. However, CO-RE only adapts
 compatible differences in type and data-structure layout. It cannot make a
 missing hook, helper, program type, or attachment mechanism available, and it
 does not ensure that the target verifier will accept the program. These
-capabilities must therefore be checked directly on the deployed kernel. This
-is especially important for enterprise distributions, where backported
-features may make the effective kernel capabilities differ from those suggested
-by the upstream version number alone
+capabilities still need to be checked on the deployed kernel, especially
+on enterprise distributions whose backports can differ from what the upstream
+version number suggests
 \cite{linux_bpf_design_qa,redhat2025backporting}.
 
 \section{Related eBPF Runtime Security Tools}
 \label{sec:related-runtime-security-tools}
 
-Existing eBPF-based runtime security tools share the objective of interpreting
-kernel-derived activity, but they place event selection, detection, and
-response at different points of the monitoring pipeline. Tracee, Falco, and
-Tetragon are considered here because they represent three relevant design
-approaches for positioning the proposed system. Tracee provides the closest
-architectural reference through its separation of event collection, policies,
-detectors, and output. Falco centres its design on declarative rules and alert
-generation, while Tetragon moves filtering and optional response closer to the
-monitored kernel hook \cite{her2025ebpfsecuritytools}.
+Runtime security tools differ in where they select events, interpret evidence
+and act on a match. The comparison here uses Tracee, Falco and Tetragon to mark
+three relevant positions in that design space: an event-oriented pipeline, a
+declarative alerting engine and a hook-centred system with optional response
+\cite{her2025ebpfsecuritytools}.
 
 \subsection{Tracee}
 \label{subsec:tracee}
 
-Tracee is the closest architectural reference among the systems considered in
-this chapter. It separates eBPF-based collection from user-space event
-processing, policy selection, detection and output. Figure~\ref{fig:tracee-architecture}
-shows this staged pipeline: kernel and networking hooks generate observations,
-which are converted into events before higher-level analysis and delivery
+Tracee is the closest architectural reference for the proposed system because
+it separates eBPF collection from event processing, policy selection,
+detection and output. In the pipeline shown in
+Figure~\ref{fig:tracee-architecture}, kernel and networking hooks produce
+observations that become events before higher-level analysis and delivery
 \cite{aquasecurity_tracee,aquasecurity_tracee_architecture,
 her2025ebpfsecuritytools}.
 
@@ -559,21 +501,20 @@ her2025ebpfsecuritytools}.
     \label{fig:tracee-architecture}
 \end{figure}
 
-The figure reflects the signature-oriented terminology of the release for which
-it was published. Current documentation retains the same broad pipeline while
-using detectors as the preferred mechanism for new threat detections and
-derived events. Observations from heterogeneous hooks and detector results are
-represented through a common event abstraction, allowing policies, detectors
-and output components to remain independent from physical attachment details
+The figure uses the signature-oriented terminology of the release in which it
+was published. Current documentation keeps the same broad pipeline but favours
+detectors for new threat detections and derived events. A common event
+abstraction represents both hook observations and detector results, keeping
+policies, detectors and output independent of physical attachment details
 \cite{aquasecurity_tracee_events,aquasecurity_tracee_custom_events,
 aquasecurity_tracee_detectors}.
 
-Tracee policies combine workload scope with rules that select events and
-optionally constrain their data. Current policy rules can also select detectors
-through threat metadata. Detectors consume declared input events, may retain
-state and produce derived events with provenance. This separates monitoring
-scope from security interpretation without defining a general-purpose temporal
-language \cite{aquasecurity_tracee_policies,
+Tracee policies combine workload scope with rules that select events and may
+constrain their data. Policy rules can also select detectors through threat
+metadata. Detectors consume declared inputs, may retain state and produce
+derived events with provenance. Monitoring scope and security interpretation
+are thus separate, without forming a general-purpose temporal language
+\cite{aquasecurity_tracee_policies,
 aquasecurity_tracee_policy_rules,aquasecurity_tracee_detector_api}.
 
 Output remains independent from event production and detection, supporting
@@ -582,19 +523,19 @@ container context. Tracee also provides routing and forensic capabilities that
 extend beyond the prototype developed in this thesis
 \cite{aquasecurity_tracee_output,aquasecurity_tracee_overview}.
 
-Its portability and trust boundaries are equally relevant. BTF, symbols,
-backports and individual hook support must be verified on enterprise kernels,
-even where the general kernel line is supported. Tracee also assumes a
-trustworthy kernel at monitoring startup; a kernel-level adversary may interfere
-with the observation mechanism \cite{aquasecurity_tracee_requirements,
+Tracee faces portability and trust boundaries as well. BTF, symbols, backports
+and individual hooks must be verified on enterprise kernels even when the
+general kernel line is supported. It also assumes that the kernel is trustworthy
+when monitoring starts; a kernel-level adversary may interfere with observation
+\cite{aquasecurity_tracee_requirements,
 aquasecurity_tracee_security_model}.
 
-The proposed system adopts the architectural separation between collection,
-policy selection, detection and output, but not Tracee's breadth. It targets a
-selected process and host-security event domain on one Rocky Linux environment
-and uses deterministic point conditions and bounded local sequences. Tracee is
-therefore prior art and an architectural reference rather than a claim of
-functional equivalence.
+The proposed system adopts this separation between collection, policy
+selection, detection and output, but not Tracee's breadth. Its scope is a
+selected process and host-security event domain on one Rocky Linux environment,
+using deterministic point conditions and bounded local sequences. The
+comparison establishes prior art and architectural influence, not functional
+equivalence.
 
 \subsection{Other Relevant eBPF Security Tools}
 \label{subsec:other-ebpf-security-tools}
@@ -608,12 +549,11 @@ produces an alert that can be routed to configured outputs
 \cite{falcosecurity_falco_kernel_architecture,falcosecurity_falco_rules,
 falcosecurity_falco_outputs}.
 
-This model demonstrates the operational value of readable rules, reusable
-expressions, explicit exceptions, and an alert-oriented interface. Falco also
-maintains process and container context used to enrich individual events.
-However, its documented rule conditions are evaluated against an incoming
-event, and separate event sources are processed independently; the core rule
-language is not presented as a general temporal sequence language across
+Falco shows how readable rules, reusable expressions and explicit exceptions
+can support an alert-oriented interface. It also maintains process and
+container context for event enrichment. Its documented conditions evaluate an
+incoming event, however, and separate sources are processed independently; the
+core rule language is not presented as a temporal sequence language across
 heterogeneous sources \cite{falcosecurity_falco_event_sources,
 falcosecurity_falco_rule_conditions}.
 
@@ -625,8 +565,8 @@ delivering a signal, or overriding a return value where the hook and kernel
 support that operation \cite{cilium_tetragon_tracing_policy,
 cilium_tetragon_selectors,cilium_tetragon_enforcement}.
 
-Tetragon therefore moves more selection and potential response close to the
-hook than an architecture centred on user-space detectors. It preserves
+Tetragon places more selection and potential response near the hook than a
+design centred on user-space detectors. It preserves
 process-lifecycle context and emits structured events through its own
 interfaces, but its documented tracing-policy model is principally
 hook-centred rather than a general language for arbitrary temporal sequences
@@ -638,19 +578,11 @@ functionality on kernel capabilities and BTF availability
 \subsection{Comparative Summary}
 \label{subsec:runtime-tools-comparison}
 
-The systems examined in this section represent different approaches to runtime
-security. Tracee provides the closest architectural reference because it
-separates kernel-level collection from the analysis performed in user space.
-Falco instead places declarative rule evaluation and alert generation at the
-centre of its design, while Tetragon moves a greater part of event selection
-and optional response closer to the kernel hook.
-
-These approaches are not directly interchangeable, but they provide useful
-reference points for the proposed system. Tracee illustrates the event-oriented
-pipeline that most closely influenced its architecture, whereas Falco and
-Tetragon establish the boundaries represented by an alert-centred rule engine
-and an enforcement-oriented design. The main distinctions are summarised in
-Table~\ref{tab:runtime-security-tools-comparison}.
+Table~\ref{tab:runtime-security-tools-comparison} places the three systems side
+by side. Tracee is the closest reference for the prototype's event-oriented
+pipeline; Falco and Tetragon mark the neighbouring rule-centred and
+enforcement-capable designs. The comparison is architectural, since the tools
+differ substantially in scope and are not interchangeable.
 
 \begin{table}[H]
     \centering
@@ -698,9 +630,8 @@ Table~\ref{tab:runtime-security-tools-comparison}.
 \section{Positioning of the Proposed Work}
 \label{sec:positioning-proposed-work}
 
-The proposed work occupies a deliberately bounded part of the Linux runtime
-security design space. It focuses on process and host-security monitoring on
-Rocky Linux 8.10 with kernel
+The proposed work covers a bounded part of Linux runtime security: process and
+host-security monitoring on Rocky Linux 8.10 with kernel
 \texttt{4.18.0-553.137.1.el8\_10.x86\_64}. Because this environment combines
 an older upstream kernel base with vendor backports, compatibility cannot be
 inferred from the version number alone. The available hooks, helpers, data
@@ -708,25 +639,20 @@ layouts, and verifier behaviour must instead be established on the deployed
 system
 \cite{redhat2025backporting}.
 
-Within this environment, eBPF programs collect selected kernel observations
-and transfer them to a Go runtime through an explicit event contract. The
-resulting records become a typed user-space event stream. Chapter~3 defines how
-that stream is scoped through policies and interpreted by detectors; the
-present chapter is concerned with the eBPF collection model and the prior-art
-systems against which the complete architecture is positioned.
+Within this environment, eBPF programs collect selected observations and send
+them to a Go runtime through an explicit event contract. The records form a
+typed event stream in user space. Chapter~3 explains how policies scope that
+stream and detectors interpret it.
 
-The individual mechanisms used by the prototype have clear precedents in
-existing runtime security systems. Tracee provides the closest architectural
-reference through its event-oriented separation of collection, policy
-selection, detection, and output. Falco demonstrates the maturity of
-declarative event rules and alert generation, while Tetragon illustrates a
-more kernel-centred design that also supports enforcement
+The prototype does not claim these mechanisms as novel in isolation. Tracee establishes
+the event-oriented separation of collection, policy selection, detection and
+output; Falco provides a mature example of declarative event rules and alerts;
+and Tetragon illustrates a more kernel-centred design with enforcement support
 \cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
 falcosecurity_falco_rules,cilium_tetragon_tracing_policy}.
 
-The contribution of this thesis therefore lies in the independent integration
-of these ideas within a compact prototype tailored to the selected enterprise
-kernel. Particular attention is given to compatibility on that environment,
-complementary observation points and the contract through which kernel records
-become typed user-space events. Chapter~3 develops the system design built on
-these foundations.
+This thesis integrates those established ideas in a compact prototype tailored
+to the selected enterprise kernel. The work concentrates on compatibility,
+complementary observation points and the contract that turns kernel records
+into typed user-space events. Chapter~3 develops the corresponding system
+design.
