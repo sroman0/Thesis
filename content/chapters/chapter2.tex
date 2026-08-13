@@ -417,7 +417,7 @@ available helpers is determined by the program type and by the capabilities of
 the target kernel, so support documented for eBPF in general does not imply
 that the same helper can be used in every execution context. This constraint is
 particularly relevant to this work, which targets Rocky Linux 8.10 with kernel
-\texttt{4.18.0-553.109.1.el8\_10.x86\_64}: helper selection must therefore be
+\texttt{4.18.0-553.137.1.el8\_10.x86\_64}: helper selection must therefore be
 validated against the capabilities of the deployed kernel and the program type
 used by each probe, rather than inferred solely from current upstream
 documentation \cite{linux_bpf_helpers,linux2026ebpfverifier}.
@@ -511,7 +511,7 @@ requiring the program to be recompiled on the monitored system
 
 In this thesis, this mechanism helps the eBPF programs access kernel structures
 according to the layout exposed by Rocky Linux 8.10 with kernel
-\texttt{4.18.0-553.109.1.el8\_10.x86\_64}. However, CO-RE only adapts
+\texttt{4.18.0-553.137.1.el8\_10.x86\_64}. However, CO-RE only adapts
 compatible differences in type and data-structure layout. It cannot make a
 missing hook, helper, program type, or attachment mechanism available, and it
 does not ensure that the target verifier will accept the program. These
@@ -701,7 +701,7 @@ Table~\ref{tab:runtime-security-tools-comparison}.
 The proposed work occupies a deliberately bounded part of the Linux runtime
 security design space. It focuses on process and host-security monitoring on
 Rocky Linux 8.10 with kernel
-\texttt{4.18.0-553.109.1.el8\_10.x86\_64}. Because this environment combines
+\texttt{4.18.0-553.137.1.el8\_10.x86\_64}. Because this environment combines
 an older upstream kernel base with vendor backports, compatibility cannot be
 inferred from the version number alone. The available hooks, helpers, data
 layouts, and verifier behaviour must instead be established on the deployed
