@@ -369,9 +369,9 @@ Helpers expose selected kernel services without granting programs unrestricted
 access to kernel internals. The verifier checks their arguments and the data
 passed to them. Availability depends on both program type and target-kernel
 capabilities; a helper documented for eBPF in general is not necessarily valid
-in every context. For the Rocky Linux target used here, helper support must be
-checked against the deployed kernel rather than inferred from current upstream
-documentation \cite{linux_bpf_helpers,linux2026ebpfverifier}.
+in every context. Support must therefore be checked on the deployed kernel
+rather than inferred from current upstream documentation
+\cite{linux_bpf_helpers,linux2026ebpfverifier}.
 
 Event transport carries records produced during eBPF execution to user space,
 where they can be decoded and processed without extending the work performed
@@ -456,15 +456,12 @@ kernel places a field at a different offset, without being recompiled on the
 monitored system
 \cite{linux_btf,linux_bpf_llvm_relocations,linux_libbpf_overview}.
 
-For this prototype, CO-RE adapts accesses to the layouts exposed by Rocky Linux
-8.10 with kernel
-\texttt{4.18.0-553.137.1.el8\_10.x86\_64}. However, CO-RE only adapts
-compatible differences in type and data-structure layout. It cannot make a
-missing hook, helper, program type, or attachment mechanism available, and it
-does not ensure that the target verifier will accept the program. These
-capabilities still need to be checked on the deployed kernel, especially
-on enterprise distributions whose backports can differ from what the upstream
-version number suggests
+CO-RE only adapts compatible differences in type and data-structure layout. It
+cannot make a missing hook, helper, program type or attachment mechanism
+available, nor can it ensure that the target verifier will accept a program.
+These capabilities must still be checked on the deployed kernel, especially on
+enterprise distributions whose backports may not be apparent from the upstream
+version number
 \cite{linux_bpf_design_qa,redhat2025backporting}.
 
 \section{Related eBPF Runtime Security Tools}
@@ -532,10 +529,9 @@ aquasecurity_tracee_security_model}.
 
 The proposed system adopts this separation between collection, policy
 selection, detection and output, but not Tracee's breadth. Its scope is a
-selected process and host-security event domain on one Rocky Linux environment,
-using deterministic point conditions and bounded local sequences. The
-comparison establishes prior art and architectural influence, not functional
-equivalence.
+selected process and host-security event domain, using deterministic point
+conditions and bounded local sequences. The comparison establishes prior art
+and architectural influence, not functional equivalence.
 
 \subsection{Other Relevant eBPF Security Tools}
 \label{subsec:other-ebpf-security-tools}
@@ -631,18 +627,8 @@ differ substantially in scope and are not interchangeable.
 \label{sec:positioning-proposed-work}
 
 The proposed work covers a bounded part of Linux runtime security: process and
-host-security monitoring on Rocky Linux 8.10 with kernel
-\texttt{4.18.0-553.137.1.el8\_10.x86\_64}. Because this environment combines
-an older upstream kernel base with vendor backports, compatibility cannot be
-inferred from the version number alone. The available hooks, helpers, data
-layouts, and verifier behaviour must instead be established on the deployed
-system
-\cite{redhat2025backporting}.
-
-Within this environment, eBPF programs collect selected observations and send
-them to a Go runtime through an explicit event contract. The records form a
-typed event stream in user space. Chapter~3 explains how policies scope that
-stream and detectors interpret it.
+host-security monitoring on the enterprise environment specified in
+Chapter~3. Its design assumes only the capabilities verified on that target.
 
 The prototype does not claim these mechanisms as novel in isolation. Tracee establishes
 the event-oriented separation of collection, policy selection, detection and

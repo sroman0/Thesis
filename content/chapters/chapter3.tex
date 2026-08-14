@@ -26,13 +26,11 @@ the required event domain, while all selected observations retain a consistent
 typed representation. Detection logic then works on this representation rather
 than being embedded in the collection programs.
 
-Two practical constraints shape the design. First, enterprise kernels may
-contain vendor backports that are not apparent from the upstream version
-number, so required capabilities have to be verified on the actual host.
-Second, runtime telemetry is continuous: unnecessary collection and unbounded
+Runtime telemetry is continuous, so unnecessary collection and unbounded
 detection state would steadily consume resources. Losses and processing
 failures must also be reported explicitly, since silence alone cannot show that
-no relevant operation took place.
+no relevant operation took place. Compatibility constraints are defined for the
+target environment below.
 
 \subsection{Target Environment and Compatibility Assumptions}
 \label{subsec:target-environment-assumptions}
@@ -175,8 +173,8 @@ pipeline must operate.
         failures through dedicated diagnostic channels, separate from monitored events and generated alerts. \\
 
         NFR-07 &
-        Assess whether steady-state user-space processing remains below 5\% 
-        of one CPU core for explicitly defined representative profiles. \\
+        Assess whether mean \gls{cpu} consumption charged to the monitor cgroup
+        remains below 5\% of one core under explicitly defined profiles. \\
 
         \bottomrule
     \end{tabularx}
@@ -250,31 +248,13 @@ transported and decoded against the event registry. User-space policy
 constraints then admit or reject the event. Admitted events can be presented
 and evaluated by detectors. A successful point or sequence match produces an
 alert containing the source evidence and available MITRE ATT\&CK metadata.
-
-\begin{figure}[H]
-    \centering
-    \makebox[\textwidth][c]{%
-        \includegraphics[
-            width=0.77\textwidth,
-            keepaspectratio
-        ]{figures/chapter3/Operational_diagnostics.drawio.png}
-    }
-
-    \caption[Responsibility boundary and end-to-end flow of the proposed
-    monitoring system.]
-    {Responsibility boundary and end-to-end flow of the proposed
-    monitoring system.}
-    \label{fig:system-responsibility-flow}
-\end{figure}
-
-Figure~\ref{fig:system-responsibility-flow} relates the control path to the
-monitoring data path. Its diagnostic branch reports runtime conditions and is
-not part of the monitored event stream.
-
-The diagram does not imply a total order across monitored events. Perf-event
-transport uses per-CPU buffers, so collective detectors use the order in which
-records reach the user-space engine. Section~\ref{subsec:perf-buffer-failure-boundaries}
-discusses this ordering constraint together with transport loss.
+Operational diagnostics remain outside this data path: they report runtime
+conditions without becoming monitored events or detector evidence. The event
+lifecycle also does not establish a total order across observations.
+Perf-event transport uses per-CPU buffers, so collective detectors use the
+order in which records reach the user-space engine.
+Section~\ref{subsec:perf-buffer-failure-boundaries} discusses this ordering
+constraint together with transport loss.
 
 \section{Kernel-Space Collection Design}
 \label{sec:kernel-space-collection-design}
@@ -287,18 +267,13 @@ of observation point behind one stable event abstraction.
 \subsection{Hook Selection and Logical Events}
 \label{subsec:hook-selection-logical-events}
 
-Hook selection starts from the evidence an event must contain. Depending on the
-operation, the useful point may expose the original request, a resolved kernel
-object, a state transition or security mediation. Entry is sufficient when an
-attempt is the relevant fact. If success and failure have different meanings,
-a compatible return observation is also needed.
-
-Availability, cost and robustness narrow the choice further. A tracepoint is
-preferred when it exposes the necessary evidence. Dynamic probes fill gaps in
-coverage, but depend more strongly on kernel symbols, signatures and calling
-conventions. A dedicated hook is also preferable to a high-frequency generic
-one when both provide equivalent evidence. These choices are made during
-design, based on the kernel mechanisms discussed in Chapter~2.
+Chapter~2 established how the observation point determines event semantics.
+At design time, the system therefore selects the smallest practical set of
+hooks that provides the evidence required by each event. The choice must also
+be available on the target kernel and avoid unnecessarily frequent attachment
+points. Stable, dedicated hooks are preferred when they expose sufficient
+information; dynamic probes are used where the exported interfaces leave a
+coverage gap.
 
 Table~\ref{tab:hooks-probes-events} distinguishes the architectural concepts
 used to describe instrumentation and event production.
@@ -344,12 +319,10 @@ used to describe instrumentation and event production.
     \label{tab:hooks-probes-events}
 \end{table}
 
-These concepts do not have a one-to-one relationship. One logical event may
-combine an entry probe, which preserves the request, with a return probe that
-adds the outcome. Several syscall variants can also produce the same event.
-Selecting a public event may in turn activate support probes that retain
-context without emitting their own record. The user-facing contract therefore
-stays independent of the hook arrangement used to produce it.
+These concepts do not have a one-to-one relationship. A logical event may have
+several producers and may depend on support probes that retain intermediate
+context without emitting a record. The public event contract therefore remains
+independent of the physical arrangement used to construct it.
 
 \subsection{Early Event Selection and Kernel-Side Filtering}
 \label{subsec:early-event-selection-filtering}
@@ -426,21 +399,11 @@ receiving registries and admission path.
 \subsection{Perf-Buffer Transport and Failure Boundaries}
 \label{subsec:perf-buffer-failure-boundaries}
 
-The event path uses perf-event transport through per-CPU buffers \\
-(\texttt{\gls{bpf}\_MAP\_TYPE\_PERF\_EVENT\_ARRAY}). This is different from the
-shared multi-producer \gls{bpf} ring buffer exposed through
-\texttt{\gls{bpf}\_MAP\_TYPE\_RINGBUF}
-\cite{linux_perf_ring_buffer,linux_bpf_ring_buffer}.
-
-Perf-event transport was selected because it is available on the target Rocky
-Linux kernel. The \gls{bpf} ring buffer appeared in a later upstream generation
-and cannot be inferred from the enterprise kernel's version or assumed as a
-vendor backport.
-
-On compatible kernels, the \gls{bpf} ring buffer can share capacity across CPUs
-and offers stronger ordering for records submitted to the same buffer.
-Per-CPU perf buffers may use capacity unevenly and do not establish a total
-cross-CPU order. Target compatibility took precedence over these advantages.
+The event path uses perf-event transport through a
+\texttt{\gls{bpf}\_MAP\_TYPE\_PERF\_EVENT\_ARRAY}. It was selected because it is
+available on the target kernel; the alternative transport models were compared
+in Chapter~2. This choice gives each CPU an independent finite buffer and does
+not establish a total order across CPUs \cite{linux_perf_ring_buffer}.
 
 Perf-event delivery is asynchronous and finite. If user space cannot drain a
 per-CPU buffer quickly enough, records may be lost and cannot be reconstructed
@@ -449,8 +412,9 @@ it violates the binary contract. These are separate failures, and neither
 shows that the corresponding kernel operation did not occur.
 
 Collective detectors consequently use arrival order rather than a reconstructed
-causal order across CPUs. Chapter~6 examines transport behaviour under the
-experimental workload.
+causal order across CPUs. Chapter~6 reports the perf-loss diagnostics observed
+under the experimental workload but does not independently measure transport
+loss.
 
 \section{User-Space Runtime Design}
 \label{sec:user-space-runtime-design}
@@ -463,15 +427,12 @@ Chapter~5.
 \subsection{Loading, Attachment and Runtime Lifecycle}
 \label{subsec:loading-attachment-runtime-lifecycle}
 
-The runtime moves through validation, setup, active monitoring and cleanup.
-Figure~\ref{fig:userspace-runtime-lifecycle} distinguishes failures that prevent
-a session from starting from those confined to one record.
-
-Configuration and external definitions are checked before kernel resources are
-acquired. The accepted scope is then translated into the eBPF programs and
-detectors required for the session. Setup failures abort startup; a malformed
-record or a detector error is reported without stopping later processing. The
-runtime releases resources it acquired even if initialisation was only partial.
+The runtime moves through validation, setup, active monitoring and cleanup, as
+shown in Figure~\ref{fig:userspace-runtime-lifecycle}. Configuration or setup
+failures prevent the session from starting, whereas failures confined to one
+record are reported without stopping later processing. The runtime retains
+ownership of acquired resources and releases them after both complete and
+partial initialisation.
 
 \begin{figure}[H]
     \centering
@@ -489,18 +450,12 @@ runtime releases resources it acquired even if initialisation was only partial.
 \subsection{Decoding, Normalisation and Event Registration}
 \label{subsec:decoding-normalisation-registration}
 
-The decoder is the boundary between transported bytes and typed user-space
-events. Using the event registry, it interprets the common context and indexed
-arguments into the representation shared by policies, detectors and output.
-Records that do not match a known schema are rejected instead of being passed
-downstream in partial form.
-
-The event registry defines public identifiers, names and argument schemas. The
-probe registry maps those logical events to producer programs and support
-dependencies. Keeping the registries separate prevents attachment planning
-from determining wire interpretation, although consistency between them is
-still required. Chapter~5 covers the decoder and the checks that enforce this
-relationship.
+The decoder is the boundary between transported bytes and the typed events
+shared by policies, detectors and output. The event registry defines their
+public identifiers and argument schemas, while the separate probe registry
+maps them to producer and support programs. Records without a valid schema are
+rejected before reaching downstream components. Chapter~5 describes the
+decoder and the consistency checks between these registries.
 
 \subsection{Event Output, Alert Output and Operational Logging}
 \label{subsec:event-alert-logging}
@@ -585,10 +540,8 @@ propagated.
 \label{sec:design-decisions-boundaries}
 
 The design favours reliable observation on the target host over the broadest
-possible event catalogue. Selective loading, explicit probe dependencies and
-checks against the deployed enterprise kernel avoid assuming that every
-registered event is portable. Support is claimed for the stated Rocky Linux
-environment, not for every Linux configuration.
+possible event catalogue. Selective loading and explicit probe dependencies
+limit collection to the event surface supported by that host.
 
 Early filtering is used only where it stays small and verifier compatible.
 Policies and detector semantics remain in Go, where they can change without
@@ -600,12 +553,11 @@ Detection state is similarly constrained. Point detectors and bounded local
 sequences add interpretation to raw telemetry without maintaining persistent
 graphs, learning statistical models or retaining unbounded correlation state.
 The prototype observes and detects; it does not enforce decisions or provide a
-general-purpose event-processing service. Chapter~6 evaluates its event
-coverage, local detections, ATT\&CK classification, compatibility and measured
-performance within that scope.
+general-purpose event-processing service. Chapter~6 evaluates node-local event
+visibility, the configured collective detector and monitor-cgroup resource
+consumption under the selected profiles.
 
-Container packaging is covered in Chapter~5 as a deployment concern. Alert
-aggregation across hosts and the addition of external deployment context are
-left to a wider platform and are neither implemented nor evaluated here. The
-system considered in this thesis ends at node-local, evidence-preserving
-detection on the identified enterprise kernel.
+Alert aggregation across hosts and the addition of external deployment context
+are left to a wider platform and are neither implemented nor evaluated here.
+The system considered in this thesis ends at node-local, evidence-preserving
+detection.

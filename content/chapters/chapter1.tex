@@ -14,7 +14,10 @@ eBPF provides a controlled execution environment inside the Linux kernel. Progra
 
 This model allows collection to occur where the kernel handles an operation, with less dependence on application-specific instrumentation. Maps and event buffers provide a structured path to user space, and unwanted activity can sometimes be discarded before transport. These facilities make eBPF a useful basis for runtime monitoring, but they do not guarantee safety, portability or low overhead. Verifier behaviour, program types, helpers, data structures and attachment mechanisms vary between kernel versions, so the monitoring pipeline must still be designed for its target system.
 
-This work was carried out as part of an industrial collaboration and targets Rocky Linux 8.10 with kernel \texttt{4.18.0-553.137.1.el8\_10.x86\_64}. The kernel belongs to a long-lived enterprise line and includes functionality backported from later upstream releases. Its version number alone is consequently insufficient to establish whether a feature is present or behaves as expected \cite{redhat2025backporting}. Kernel compatibility is treated as a design constraint throughout the thesis.
+This work was carried out as part of an industrial collaboration and targets
+Rocky Linux 8.10. Its enterprise kernel includes vendor backports, so
+compatibility is treated as a design constraint rather than inferred from the
+upstream version number alone \cite{redhat2025backporting}.
 
 On this basis, the prototype operates as a host-level runtime monitor. It collects security-relevant events from the target system and applies bounded local detection to individual observations and short sequences.
 
@@ -42,7 +45,7 @@ The remaining chapters cover the technical background, system design, implementa
     \item \textbf{Chapter~2 - eBPF Architecture} introduces Linux runtime instrumentation, the eBPF execution model, object loading and attachment, maps, transport and portability. It also reviews related eBPF-based runtime-security tools.
     \item \textbf{Chapter~3 - Requirements and System Design} defines the target environment, functional and operational requirements, architectural components, event flow and the boundaries between kernel-space collection and user-space processing.
     \item \textbf{Chapter~4 - Kernel-Space Event Collection Implementation} describes the shared eBPF event framework, process and security hook families, binary record contract, perf-buffer transport, early filtering and compatibility work required by the target kernel.
-    \item \textbf{Chapter~5 - User-Space and Detection Implementation} presents the Go runtime, probe registry, attachment lifecycle, decoder, event selection, policy and detector subsystems, \gls{attack} metadata, output handling, structured logging and container packaging.
-    \item \textbf{Chapter~6 - Experimental Evaluation} evaluates the prototype in a Kubernetes environment deployed with Minikube. The experimental scenario uses a vulnerable \gls{ctf} workload as the target of controlled attacks to assess event collection, detector operation and alert generation, together with the prototype's CPU and memory overhead.
+    \item \textbf{Chapter~5 - User-Space and Detection Implementation} presents the Go runtime, probe registry, attachment lifecycle, decoder, event selection, policy and detector subsystems, \gls{attack} metadata, output handling and structured logging.
+    \item \textbf{Chapter~6 - Experimental Evaluation} evaluates the prototype in a Kubernetes environment deployed with Minikube. The experimental scenario uses a vulnerable \gls{ctf} workload as the target of controlled attacks to assess event collection, detector operation and alert generation, together with CPU and memory consumption measured within the monitor's cgroup.
     \item \textbf{Chapter~7 - Conclusions} summarises the results, discusses the principal limitations of the prototype and identifies possible directions for future development.
 \end{itemize}
