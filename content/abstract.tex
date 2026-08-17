@@ -1,27 +1,9 @@
 % !TEX encoding = UTF-8 Unicode
 % !TEX root = ../main.tex
-This thesis describes an eBPF-based tool for monitoring process activity on
-  Rocky Linux 8.10. Its development centred on a set of kernel hooks that observe
-  how processes are created, replace their executable image, change credentials,
-  interact with other processes and access files, memory, namespaces and cgroups.
+An extended Berkeley Packet Filter (eBPF)-based tool was developed to monitor process activity on Rocky Linux 8.10. The work focuses on kernel hooks that capture process creation and image replacement, credential changes, inter-process interactions, and operations involving files, memory, namespaces and cgroups.
 
-  The hooks are attached to syscalls, tracepoints, kernel functions and Linux
-  Security Module interfaces. Since each attachment point exposes a different
-  stage of an operation, the resulting events distinguish between a process
-  request, a security check, a committed state change and the result returned by
-  the kernel. Events are encoded in a bounded binary format, sent through a
-  perf-event channel and decoded by a Go application.
+The monitoring logic combines syscalls, tracepoints, kernel functions and Linux Security Module interfaces. Because these attachment points observe different stages of kernel execution, the collected events can represent a process request, a security decision, a committed state change or the final result of an operation. Event data are stored in a bounded binary format, transferred through a perf-event channel and decoded by a Go user-space component.
 
-  In user space, the tool loads only the probes required by the selected
-  configuration and evaluates the decoded events through policies and
-  deterministic detectors. Policies define the monitoring scope, whereas
-  detectors recognise either individual events or short, ordered sequences of
-  related activity. Alerts retain the evidence that produced them and can be
-  classified using MITRE ATT\&CK metadata.
+Probe loading is driven by the active configuration so that only the required instrumentation is enabled. Decoded events are then evaluated through policies and deterministic detectors. Policies restrict the monitored scope, while detectors identify either single events or short ordered sequences of related activity. Alerts preserve the events that triggered them and may be associated with \gls{attack} metadata.
 
-  The prototype was tested on a single-node Minikube environment using an adapted
-  Capture the Flag challenge. During the experiment, it observed process activity
-  originating from a separate container and reconstructed the sequence associated
-  with shell execution and access to a protected file. These results show that
-  eBPF hooks can support detailed, configurable process monitoring while keeping
-  collection close to the kernel events being observed.
+The prototype was evaluated in a single-node Minikube environment using an adapted Capture the Flag challenge. During the experiment, the monitor captured process activity generated from a separate container and reconstructed the sequence leading to shell execution and access to a protected file. The evaluation demonstrates the feasibility of using eBPF to obtain detailed and configurable process-level visibility while keeping event collection close to the relevant kernel execution paths.

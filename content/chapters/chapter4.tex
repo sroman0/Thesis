@@ -16,7 +16,7 @@ The build has three ordered stages. The libbpf source under
 \path{3rdparty/libbpfgo/libbpf/src} is first compiled into the local static
 library \path{dist/libbpf/obj/libbpf.a}, with its headers and package metadata.
 Clang then compiles the eBPF source for x86-64 into
-\path{dist/project.\gls{bpf}.o}. Finally, \gls{cgo} links the Go application against
+\path{dist/project.bpf.o}. Finally, \gls{cgo} links the Go application against
 the local libbpf archive and libbpfgo bindings to produce
 \path{dist/project}. The Makefile enforces this order and avoids silently using
 system copies of the kernel-facing dependencies.
@@ -59,8 +59,6 @@ the interface described in Section~\ref{sec:implementation-binary-contract}.
 Listing~\ref{lst:ebpf-shared-construction} shows the main stages shared by these
 helpers. Details related to process-map initialisation and optional stack
 capture are omitted because they do not change the event-construction process.
-
-\newpage
 
 \begin{lstlisting}[
       language=C,
@@ -342,14 +340,6 @@ a security hook sees a proposal before it becomes active. The implementation
 therefore records identity requests, mediation, committed credentials and
 capability checks at separate points.
 
-Linux associates each process with several user and group identifiers. The
-real ID represents the identity under which the process was started, while the
-effective ID is used for most access-control decisions. The saved ID allows a
-process to retain an effective identity that may later be restored, supporting
-temporary privilege reduction and recovery. Linux also maintains filesystem
-IDs, which are used specifically during filesystem permission checks. The same
-distinction applies to user and group credentials \cite{gazestani2025linuxuids}.
-
 \begin{figure}[H]
     \centering
     \makebox[\textwidth][c]{%
@@ -362,6 +352,14 @@ distinction applies to user and group credentials \cite{gazestani2025linuxuids}.
     {Real, effective, saved and filesystem UIDs for a process \cite{gazestani2025linuxuids}.}
     \label{fig:real-effective-saved-uid}
 \end{figure}
+
+Linux associates each process with several user and group identifiers. The
+real ID represents the identity under which the process was started, while the
+effective ID is used for most access-control decisions. The saved ID allows a
+process to retain an effective identity that may later be restored, supporting
+temporary privilege reduction and recovery. Linux also maintains filesystem
+IDs, which are used specifically during filesystem permission checks. The same
+distinction applies to user and group credentials \cite{gazestani2025linuxuids}.
 
 A process can change its effective or filesystem privileges without changing
 its real identity. A saved identity may also allow dropped privileges to be

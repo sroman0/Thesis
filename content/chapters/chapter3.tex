@@ -427,13 +427,6 @@ Chapter~5.
 \subsection{Loading, Attachment and Runtime Lifecycle}
 \label{subsec:loading-attachment-runtime-lifecycle}
 
-The runtime moves through validation, setup, active monitoring and cleanup, as
-shown in Figure~\ref{fig:userspace-runtime-lifecycle}. Configuration or setup
-failures prevent the session from starting, whereas failures confined to one
-record are reported without stopping later processing. The runtime retains
-ownership of acquired resources and releases them after both complete and
-partial initialisation.
-
 \begin{figure}[H]
     \centering
     \makebox[\textwidth][c]{%
@@ -446,6 +439,13 @@ partial initialisation.
     {Simplified user-space runtime lifecycle.}
     \label{fig:userspace-runtime-lifecycle}
 \end{figure}
+
+The runtime moves through validation, setup, active monitoring and cleanup, as
+shown in Figure~\ref{fig:userspace-runtime-lifecycle}. Configuration or setup
+failures prevent the session from starting, whereas failures confined to one
+record are reported without stopping later processing. The runtime retains
+ownership of acquired resources and releases them after both complete and
+partial initialisation.
 
 \subsection{Decoding, Normalisation and Event Registration}
 \label{subsec:decoding-normalisation-registration}
