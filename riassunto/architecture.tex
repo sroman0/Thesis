@@ -1,0 +1,26 @@
+\begin{figure}[ht]
+    \centering
+    \renewcommand{\arraystretch}{1.2}
+
+    \begin{tabular}{ccc}
+        \flowbox{Ciclo di vita dei processi\\e transizioni eseguibili} &
+        \flowbox{Identita, credenziali\\e controllo dei processi} &
+        \flowbox{File e sicurezza\\del filesystem} \\
+        \flowbox{Memoria, namespace\\e cgroup} &
+        \flowbox{Moduli, eBPF e\\interfacce kernel} &
+        \flowbox{Helper comuni\\e filtro UID}
+    \end{tabular}
+
+    \vspace{0.55em}
+    \textbf{record binario indicizzato e trasporto perf-event}
+    \vspace{0.55em}
+
+    \begin{tabular}{ccc}
+        \flowbox{Decoder Go\\e registro degli eventi} &
+        \flowbox{Policy e detector\\point e collective} &
+        \flowbox{Eventi, alert e\\diagnostica separata}
+    \end{tabular}
+
+    \caption{Famiglie di hook host-level e percorso comune verso l'analisi in user space.}
+    \label{fig:summary-host-hook-families}
+\end{figure}
