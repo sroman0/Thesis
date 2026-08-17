@@ -142,42 +142,77 @@ distinguished from its planned configuration.
 \label{sec:evaluation-workload}
 
 AES-beta is a public \gls{ctf} challenge used here as a controlled source of
-process and file activity \cite{openecsc2024_aes_beta}. In the benign scenario,
-the client sent a key and plaintext to the service, received the transformed
-message and checked it against the expected XOR result. This path exercised the
-network service without requesting the flag.
+  process and file activity \cite{openecsc2024_aes_beta}. In the benign scenario,
+  the client sends a key and plaintext to the service, receives the transformed
+  message and compares it with the expected XOR result. This interaction exercises
+  the network service without requesting the flag.
 
-The exploit scenario recovered the stack canary by testing 256 candidates for
-each of seven unknown bytes. The client therefore created 1,792 candidate
-workers and one final worker that executed the payload, for 1,793 reported
-workers in each run. Successful exploitation caused the target process to
-invoke a shell, execute \texttt{cat} and open the mounted flag. The synthetic
-flag value made application success directly observable without using a real
-competition secret.
+  The exploit proceeds through two main stages. During preparation, the client
+  first leaks the information required to determine the library base and then
+  reconstructs the stack canary. It tests 256 candidates for each of seven unknown
+  bytes, creating 1,792 candidate workers. Once the canary has been recovered, one
+  additional worker delivers the final payload, for 1,793 reported workers in
+  each exploit run.
 
-The monitor selected only the three logical events required by the scenario
-and applied the exact UID 10001 filter before transport. The collective
-detector required four ordered observations within five seconds:
+  The final payload bypasses stack protection and invokes
+  \texttt{system("cat flag")}. This causes the target process to execute
+  \path{/bin/sh}, invoke \path{/bin/cat} and access the flag mounted at
+  \path{/opt/aes-beta/flag}. Recovering the synthetic flag provides an observable
+  application-level indication that exploitation succeeded. The complete
+  application flow is summarised in
+  Figure~\ref{fig:aes-beta-exploitation-flow}.
 
-\begin{enumerate}
-    \item a successful \texttt{sched\_process\_exec} transition to
-    \path{/bin/sh};
-    \item a successful \texttt{sched\_process\_exec} transition to
-    \path{/bin/cat};
-    \item a \texttt{security\_file\_open} observation whose resolved path was
-    \path{/opt/aes-beta/flag};
-    \item an \texttt{open} event for caller pathname \texttt{flag} with a
-    non-negative returned file descriptor.
-\end{enumerate}
+  \begin{figure}[p]
+      \centering
 
-The LSM event identifies the resolved filesystem object under security
-mediation, while the final syscall event supplies the success evidence that the
-entry-stage hook cannot provide. The sequence used \texttt{process\_tree}
-correlation and required UID 10001. Its ATT\&CK metadata classified the
-observations as Execution and Collection through TA0002, TA0009, T1059.004 and
-T1005 \cite{strom2020attack}. These identifiers communicate the intended
-security meaning of the alert; the experimental oracle remained the explicit
-four-event sequence.
+      \includegraphics[
+          width=0.82\textwidth,
+          keepaspectratio
+      ]{figures/chapter6/ctf_exploitation_flow.drawio.png}
+
+      \vspace{1em}
+
+      \includegraphics[
+          width=0.82\textwidth,
+          keepaspectratio
+      ]{figures/chapter6/ctf_exploitation_flow_II.drawio.png}
+
+      \caption[AES-beta exploitation flow]
+      {AES-beta exploitation flow. The upper diagram shows the information-leak
+      and canary-reconstruction phase. The lower diagram shows the final payload,
+      the resulting shell and \texttt{cat} process chain, and access to the
+      synthetic flag.}
+      \label{fig:aes-beta-exploitation-flow}
+  \end{figure}
+
+  The monitor does not inspect the network payload, leaked addresses or
+  canary-reconstruction attempts. It observes the host-side effects produced by
+  the final worker. The monitoring configuration selects the three logical events
+  required to represent these effects and applies the exact UID 10001 filter
+  before event transport.
+
+  The collective detector requires four ordered observations within five seconds:
+
+  \begin{enumerate}
+      \item a \texttt{sched\_process\_exec} transition to \path{/bin/sh};
+      \item a \texttt{sched\_process\_exec} transition to \path{/bin/cat};
+      \item a \texttt{security\_file\_open} observation whose resolved path is
+      \path{/opt/aes-beta/flag};
+      \item an \texttt{open} event for caller pathname \texttt{flag} with a
+      non-negative returned file descriptor.
+  \end{enumerate}
+
+  The executable-transition events confirm that the shell and
+  \texttt{cat} images were installed. The LSM event identifies the resolved
+  filesystem object while it is under security mediation, whereas the final
+  syscall event provides evidence that the file was successfully opened.
+
+  The sequence uses \texttt{process\_tree} correlation and requires UID 10001.
+  Its ATT\&CK metadata classifies the observations as Execution and Collection
+  through TA0002, TA0009, T1059.004 and T1005
+  \cite{strom2020attack}. These identifiers communicate the intended security
+  meaning of the alert, while the explicit four-event sequence remains the
+  experimental detection oracle.
 
 \section{Isolation and Visibility Validation}
 \label{sec:evaluation-preconditions}
