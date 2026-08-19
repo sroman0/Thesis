@@ -1,110 +1,82 @@
-\noindent\textbf{Quadro generale e obiettivo.}
-La crescente adozione di container e piattaforme di orchestrazione rende
-necessario osservare il comportamento delle applicazioni senza modificarne il
-codice e senza dipendere esclusivamente dai log prodotti in user space. eBPF
-permette di collegare programmi verificati a punti specifici del kernel Linux,
-offrendo visibilita su processi, credenziali, file, memoria e meccanismi di
-isolamento. L'obiettivo della tesi e progettare e implementare un prototipo di
-monitoraggio runtime basato su eBPF, capace di raccogliere eventi host-level in
-modo selettivo e di conservarne il significato fino alla successiva analisi in
-user space.
+\noindent\textbf{Context and objective.}
+Containers and orchestration platforms require applications to be observed
+without modifying their code or relying solely on their logs. eBPF allows
+verified programs to be attached to selected points in the Linux kernel,
+exposing processes, credentials, files, memory and isolation mechanisms. This
+thesis designs and implements a runtime monitoring prototype that selectively
+collects host-level events and transfers them to user space with the context
+required for analysis.
 
-Il lavoro considera Rocky Linux 8.10 con kernel 4.18 come ambiente di
-riferimento. La compatibilita viene verificata sul kernel effettivo, includendo
-le estensioni distribuite dal vendor, poiche CO-RE e BTF adattano l'accesso alle
-strutture ma non rendono disponibili hook, helper o meccanismi di attachment
-assenti. Il sistema e uno strumento di osservazione e rilevamento: non modifica
-le decisioni del kernel e non agisce come motore di enforcement.
+The reference environment is Rocky Linux 8.10 with kernel 4.18. Compatibility
+is verified on the actual kernel because CO-RE and BTF adapt structure access
+but cannot provide missing hooks, helpers or attachment mechanisms. The
+prototype observes and detects events without changing kernel decisions.
 
 \medskip
-\noindent\textbf{Implementazione degli hook nel sistema host.}
-La parte principale del lavoro riguarda la selezione e l'implementazione degli
-hook necessari a rappresentare le operazioni osservate. I programmi eBPF sono
-collegati a syscall, tracepoint, funzioni del kernel e interfacce Linux Security
-Module. Questi punti non sono equivalenti: una syscall in ingresso conserva la
-richiesta del processo, un hook LSM espone un'operazione durante la mediazione di
-sicurezza, un tracepoint puo confermare una transizione completata e un hook di
-ritorno aggiunge il risultato disponibile al chiamante.
+\noindent\textbf{Host-level hook implementation.}
+The main contribution is the selection and implementation of the host hooks.
+The eBPF programs attach to system calls, tracepoints, kernel functions and
+Linux Security Module interfaces. A system-call entry preserves the request,
+an LSM hook observes security mediation, a tracepoint may confirm a transition,
+and a return hook adds the reported result.
 
-Due forme di costruzione vengono riutilizzate dalle diverse famiglie. Gli hook
-diretti producono e inviano l'evento in una sola invocazione. Le operazioni che
-richiedono sia argomenti sia risultato usano invece programmi accoppiati: il
-programma di ingresso salva dati temporanei per il thread, mentre quello di
-ritorno recupera tali dati, aggiunge il valore restituito e completa l'evento.
-Workspace e scratch buffer per-CPU evitano di collocare record di grandi
-dimensioni nello stack eBPF. Gli argomenti sono serializzati con indici e limiti
-espliciti, quindi soltanto la parte popolata del record attraversa il perf-event
-buffer.
+Direct hooks produce an event in one invocation. Paired hooks instead retain
+entry arguments and complete them at return, using temporary state identified
+by thread and event. Per-CPU workspaces keep large records off the eBPF stack.
+Arguments are serialised with explicit indexes and bounds, and only the
+populated record prefix crosses the perf-event buffer.
 
-Gli hook di processo distinguono la richiesta di creazione dal ciclo di vita
-effettivo del task. Gli eventi relativi a fork, vfork e clone conservano il
-risultato della syscall e, per clone, anche il modello di condivisione richiesto.
-I tracepoint dello scheduler descrivono invece creazione, sostituzione
-dell'immagine eseguibile e terminazione. Per exec, gli ingressi di execve ed
-execveat mantengono percorso e argomenti del chiamante; gli hook
-\emph{security\_bprm} aggiungono l'identita risolta del binario;
-\emph{sched\_process\_exec} conferma la
-transizione riuscita; un evento dedicato rappresenta il ritorno negativo.
+Process hooks distinguish a request from the task's actual lifecycle. Fork,
+vfork and clone retain the system-call result, while scheduler tracepoints
+describe creation, executable replacement and exit. For execution, entry hooks
+preserve the path and arguments, \emph{security\_bprm} hooks add the resolved
+binary identity, and \emph{sched\_process\_exec} confirms a successful
+transition. A separate event records a negative execve or execveat result.
 
-Gli hook di identita separano analogamente richiesta, mediazione e stato
-installato. Le famiglie setuid e setgid registrano gli identificatori richiesti
-e il risultato. \emph{security\_task\_fix\_setuid} osserva la proposta durante
-il controllo di sicurezza, mentre \emph{commit\_creds} confronta le credenziali precedenti
-e nuove quando la sostituzione diventa attiva. Il relativo evento include UID,
-GID, namespace utente, secure bits e capability set. \emph{cap\_capable} rende infine
-visibili i singoli controlli di capability senza interpretarli come decisione
-finale sull'operazione.
+Identity hooks similarly separate request, mediation and installed state. The
+setuid and setgid families record identifiers and results;
+\emph{security\_task\_fix\_setuid} observes the proposal, whereas
+\emph{commit\_creds} compares old and new credentials when they become active.
+UIDs, GIDs, the user namespace and capability sets expose the transition
+without confusing an intermediate check with its final outcome.
 
 \newpage
 \summaryPageHeader
 
-Gli hook filesystem preservano la differenza tra il pathname fornito dal
-processo e l'oggetto risolto dal kernel. Le syscall open, chmod e chown
-descrivono intenzione e risultato, riunendo piu varianti fisiche in uno schema
-logico comune. \emph{security\_file\_open} riceve invece la struttura file gia risolta e
-registra percorso kernel, device, inode e change time, insieme al pathname del
-chiamante quando recuperabile. Ulteriori hook osservano controlli di permesso,
-ioctl, unlink, rename, symlink, creazione di nodi speciali e modifiche alla
-topologia di mount.
+Filesystem hooks distinguish the pathname supplied by the process from the
+object resolved by the kernel. The open, chmod and chown system calls describe
+request and result, combining several variants in a shared schema.
+\emph{security\_file\_open} instead records the resolved path, device, inode and
+change time, while retaining the caller pathname when recoverable. Further
+hooks observe permissions, ioctl, directory-entry changes and mount topology.
 
-La copertura host-level comprende inoltre mmap, mprotect e trasferimenti di
-memoria tra processi, nonche le transizioni di namespace richieste da setns e
-unshare. \emph{switch\_task\_ns} registra soltanto gli identificatori effettivamente
-cambiati, mentre gli hook cgroup descrivono creazione, rimozione e spostamento
-dei task usando identita locali del kernel. Le superfici kernel-facing includono
-caricamento dei moduli, operazioni eBPF sottoposte a mediazione, registrazione di
-kprobe, risoluzione di simboli, creazione di entry procfs, user-mode helper e
-letture di file avviate dal kernel. Tali eventi forniscono evidenza per i
-detector, ma non dimostrano da soli integrita o autorizzazione.
+Coverage also includes memory, cross-process transfers, namespaces and cgroups.
+The mmap and mprotect system calls preserve requests and results, while security
+hooks add the kernel objects involved. \emph{switch\_task\_ns} records only
+changed identifiers, and cgroup hooks use local kernel identities.
+Kernel-facing surfaces include modules, eBPF operations, kprobes, symbols,
+procfs, user-mode helpers and files read by the kernel. These events provide
+evidence to detectors without independently proving authorisation or integrity.
 
 \input{architecture.tex}
 
-Gli hook condividono inizializzazione, filtro UID, serializzazione indicizzata e
-sottomissione perf. Il contesto binario comune mantiene identita host e
-namespace-relative del processo, timestamp, syscall ed evento logico. Branch
-CO-RE espliciti gestiscono differenze in task, capability, inode e cgroup del
-kernel target. Loop e accessi variabili sono limitati in forma visibile al
-verifier; l'implementazione non approssima invece funzionalita non disponibili
-sul sistema osservato.
+The hooks share initialisation, UID filtering, serialisation and submission.
+Their common context preserves process identity, namespaces, timestamps, system
+calls and logical events. Explicit CO-RE branches handle differences in the
+target kernel, while loops and variable accesses obey verifier-visible bounds.
 
 \medskip
-\noindent\textbf{Elaborazione in user space.}
-Un runtime sviluppato in Go seleziona i programmi necessari, espande le
-dipendenze interne e disabilita l'autoload dei programmi esclusi. Il decoder
-converte i record binari in eventi tipizzati secondo un registro condiviso. Le
-policy definiscono ambito e soppressione, mentre detector deterministici
-riconoscono condizioni point o brevi sequenze collective correlate per
-processo, risorsa file o cgroup. Gli alert conservano gli eventi che hanno
-completato il match e possono includere metadati MITRE ATT\&CK come
-classificazione.
+\noindent\textbf{User-space processing.}
+The Go runtime selects programs, expands dependencies and decodes records into
+typed events through a shared registry. Policies define scope and suppression;
+deterministic detectors recognise point conditions or short collective
+sequences correlated by process, file or cgroup. Alerts preserve the matching
+evidence and may include MITRE ATT\&CK classification metadata.
 
 \medskip
-\noindent\textbf{Validazione e risultati.}
-Il prototipo e stato infine validato in un cluster Minikube single-node con
-monitor, target AES-beta e client in tre Pod distinti. Tre interazioni benigne
-non hanno prodotto alert; in tre esecuzioni dell'exploit e stata recuperata la
-flag sintetica e il detector ha ricostruito la sequenza composta da shell,
-esecuzione di cat e accesso riuscito al file protetto. Il test conferma la
-visibilita node-local del prototipo in questo scenario controllato, senza
-estendere la conclusione a monitoraggio cross-node, least privilege, copertura
-generale degli attacchi o enforcement.
+\noindent\textbf{Validation and results.}
+The Minikube validation separated the monitor, AES-beta target and client into
+three Pods on one node. Three benign runs produced no alerts; three exploit
+runs recovered the synthetic flag and generated the expected sequence. This
+confirms node-local visibility in the controlled scenario, without implying
+general attack coverage or cross-node monitoring.

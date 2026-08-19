@@ -3,24 +3,24 @@
     \renewcommand{\arraystretch}{1.2}
 
     \begin{tabular}{ccc}
-        \flowbox{Ciclo di vita dei processi\\e transizioni eseguibili} &
-        \flowbox{Identita, credenziali\\e controllo dei processi} &
-        \flowbox{File e sicurezza\\del filesystem} \\
-        \flowbox{Memoria, namespace\\e cgroup} &
-        \flowbox{Moduli, eBPF e\\interfacce kernel} &
-        \flowbox{Helper comuni\\e filtro UID}
+        \flowbox{Process lifecycle\\and executable transitions} &
+        \flowbox{Identity, credentials\\and process control} &
+        \flowbox{File and filesystem\\security} \\
+        \flowbox{Memory, namespaces\\and cgroups} &
+        \flowbox{Modules, eBPF and\\kernel interfaces} &
+        \flowbox{Shared helpers\\and UID filter}
     \end{tabular}
 
     \vspace{0.55em}
-    \textbf{record binario indicizzato e trasporto perf-event}
+    \textbf{indexed binary record and perf-event transport}
     \vspace{0.55em}
 
     \begin{tabular}{ccc}
-        \flowbox{Decoder Go\\e registro degli eventi} &
-        \flowbox{Policy e detector\\point e collective} &
-        \flowbox{Eventi, alert e\\diagnostica separata}
+        \flowbox{Go decoder\\and event registry} &
+        \flowbox{Policies and point or\\collective detectors} &
+        \flowbox{Events, alerts and\\separate diagnostics}
     \end{tabular}
 
-    \caption{Famiglie di hook host-level e percorso comune verso l'analisi in user space.}
+    \caption{Host-level hook families and their shared path to user-space analysis.}
     \label{fig:summary-host-hook-families}
 \end{figure}
