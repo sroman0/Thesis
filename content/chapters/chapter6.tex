@@ -45,8 +45,9 @@ result, client result, alert count and completeness, reported loss diagnostics
 and restart delta. Three runs of each class were retained without replacement.
 For the performance campaign, the independent variable is the monitor profile:
 exact UID-filtered, unfiltered, or no monitor. The primary dependent metric is
-monitor-cgroup CPU consumption; cgroup memory, process \gls{rss}, target CPU
-and node CPU provide additional context. Each profile was repeated three times
+monitor-container cgroup CPU consumption; cgroup memory, cgroup
+\texttt{total\_rss}, target CPU and node CPU provide additional context. Each
+profile was repeated three times
 in the rotated orders F--U--N, U--N--F and N--F--U to reduce simple ordering
 bias.
 
@@ -140,13 +141,12 @@ host process visibility merely for the experiment \cite{kubernetes_process_names
 \section{AES-beta Workload and Controlled Attack Scenario}
 \label{sec:evaluation-aes-beta-scenario}
 
-AES-beta is a public \gls{ctf} challenge from openECSC-2024, pinned for the
-experiment at revision
-\path{2602f22c664eb98398413e6a7dfe03ea88b2d296} \cite{openecsc2024_aes_beta}.
-The challenge was adapted only where required for repeatable execution in the
-laboratory, and the original competition secret was replaced by the synthetic
-value mounted into the target Pod. Image and source checksums were retained to
-separate the controlled workload from later repository changes.
+AES-beta is a public \gls{ctf} challenge from openECSC-2024
+\cite{openecsc2024_aes_beta}. The experiment used a fixed local copy, adapted
+only where required for repeatable execution in the laboratory. The original
+competition secret was replaced by the synthetic value mounted into the target
+Pod. Image and source checksums were retained with the experimental artefacts
+to distinguish the evaluated workload from later repository changes.
 
 The benign client submits a valid key and plaintext, receives the transformed
 message and compares it with the expected result. It exercises the network
@@ -220,7 +220,7 @@ topology.
 
 All three exploit runs recovered the synthetic flag and generated exactly one
 alert. Each alert retained four records in the required order: a
-\texttt{sched\_process\_exec} event for \path{/bin/sh}, another for
+\texttt{sched\_process\_}\allowbreak\texttt{exec} event for \path{/bin/sh}, another for
 \path{/bin/cat}, a \texttt{security\_file\_open} record resolving the mounted
 flag, and an \texttt{open} record whose return value was the non-negative file
 descriptor 2. This final record separates successful open evidence from the
@@ -233,6 +233,36 @@ immediate parent-child alternative and provides no evidence for arbitrary
 ancestry reconstruction. The observed completion validates the configured
 sequence for this exploit path, rather than all collective detectors or every
 possible implementation of the attack.
+
+The following abridged extract makes the retained evidence from exploit run E1
+explicit. It is transcribed from the JSON alert emitted by the monitor
+DaemonSet; timestamps and unrelated context fields are omitted for readability.
+
+\begin{center}
+\begin{minipage}{0.94\textwidth}
+\footnotesize
+\setlength{\parindent}{0pt}
+\texttt{detector=aes-beta-command-execution}\\
+\texttt{severity=high, events=4}\\[0.25em]
+\texttt{[1] sched\_process\_exec: host\_pid=3848448, uid=10001}\\
+\hspace*{1.6em}\texttt{file=/bin/sh}\\
+\texttt{[2] sched\_process\_exec: host\_pid=3848448, uid=10001}\\
+\hspace*{1.6em}\texttt{file=/bin/cat}\\
+\texttt{[3] security\_file\_open: host\_pid=3848448, uid=10001}\\
+\hspace*{1.6em}\texttt{resolved=/opt/aes-beta/flag, requested=flag}\\
+\texttt{[4] open: host\_pid=3848448, uid=10001}\\
+\hspace*{1.6em}\texttt{pathname=flag, return=fd:2}\\[0.25em]
+\texttt{ATT\&CK: TA0002, TA0009; T1059.004, T1005}
+\end{minipage}
+\end{center}
+
+The first two records confirm the shell and \texttt{cat} executable
+transitions. The third preserves the resolved-object evidence observed at the
+LSM mediation point, while the fourth records the successful syscall result.
+The repeated host PID and UID make the same target process visible in the
+extract; the detector used its stable local process identity to complete this
+particular sequence. The high-severity alert and ATT\&CK fields are detector
+output metadata rather than independent evidence that the attack succeeded.
 
 The application and detector oracles agreed in all three exploit runs, but they
 remain logically independent. Recovering the flag demonstrates that the attack
@@ -310,11 +340,13 @@ After each profile change, the setup allowed a ten-second warm-up before the
 official run. A nominal 75-second sampler recorded one-second observations,
 but statistics were calculated only from samples whose host timestamps fell
 within the actual exploit start and end markers. The principal CPU metric was
-the change in the monitor Pod's cgroup-v1 CPU accounting divided by elapsed
-wall time, expressed as a percentage of one CPU core
-\cite{linux_cgroup_v1_cpuacct}. Memory was read from the monitor cgroup, while
-\gls{rss} described the resident memory of the monitor process. These metrics
-have different ownership and are not interchangeable.
+the change in the monitor container's cgroup-v1 CPU accounting divided by
+elapsed wall time, expressed as a percentage of one CPU core
+\cite{linux_cgroup_v1_cpuacct}. Total memory and the
+\texttt{total\_rss} counter were read from the same container cgroup. The
+latter is the cgroup-v1 resident-memory counter and must not be interpreted as
+the \texttt{/proc} RSS of the monitor process. These metrics share a cgroup
+boundary but describe different resources.
 
 Each profile was run once in each of three rounds. The order changed across
 rounds to F--U--N, U--N--F and N--F--U. Per-profile means and sample
@@ -327,46 +359,53 @@ workload.
 \subsection{Monitor CPU and Memory Consumption}
 \label{subsec:evaluation-monitor-resources}
 
-Table~\ref{tab:evaluation-performance-profiles} gives the attributable monitor
-metrics. The filtered mean remained tightly grouped between 0.44\% and 0.47\%
-of one core, with a mean of 0.46\% and an \gls{sd} of 0.02 percentage points.
+Table~\ref{tab:evaluation-performance-profiles} gives the observed monitor
+metrics and exposes the values from each retained run. The filtered mean
+remained tightly grouped between 0.44\% and 0.47\% of one core, with a mean of
+0.46\% and an \gls{sd} of 0.02 percentage points.
 The unfiltered mean was 5.73\%, with an \gls{sd} of 0.61 and a range from
 5.28\% to 6.43\%. The mean run-level 95th percentile was 1.00\% for the
 filtered profile and 8.38\% for the unfiltered profile.
 
 \begin{table}[H]
     \centering
-    \small
-    \setlength{\tabcolsep}{4pt}
+    \footnotesize
+    \setlength{\tabcolsep}{3pt}
     \renewcommand{\arraystretch}{1.14}
-    \begin{tabularx}{\textwidth}{@{}p{0.16\textwidth}r r r r r X@{}}
+    \begin{tabularx}{\textwidth}{@{}p{0.13\textwidth}p{0.12\textwidth}
+        p{0.19\textwidth}p{0.14\textwidth}p{0.18\textwidth}X@{}}
         \toprule
-        \textbf{Profile} & \textbf{Runs} & \textbf{Mean CPU} &
-        \textbf{SD} & \textbf{Range} & \textbf{Mean P95} &
-        \textbf{Peak memory / RSS} \\
+        \textbf{Profile} & \textbf{Samples R1--R3} &
+        \textbf{Run CPU means R1--R3} & \textbf{Mean $\pm$ SD} &
+        \textbf{Run P95 R1--R3} &
+        \textbf{Peak memory / \texttt{total\_rss}} \\
         \midrule
-        UID-filtered & 3 & 0.46\% & 0.02 & 0.44--0.47\% & 1.00\% &
+        UID-filtered & 45 / 38 / 46 & 0.46 / 0.47 / 0.44\% &
+        0.46 $\pm$ 0.02 pp & 1.01 / 1.12 / 0.87\% &
         92.17 / 36.97 MiB \\
-        Unfiltered & 3 & 5.73\% & 0.61 & 5.28--6.43\% & 8.38\% &
+        Unfiltered & 52 / 48 / 52 & 6.43 / 5.48 / 5.28\% &
+        5.73 $\pm$ 0.61 pp & 9.54 / 8.06 / 7.53\% &
         110.21 / 41.24 MiB \\
         \bottomrule
     \end{tabularx}
-    \caption{Monitor-cgroup CPU and memory observations across three runs per
-    monitored profile. CPU is expressed as a percentage of one core.}
+    \caption{Per-run monitor-container cgroup observations. CPU values are
+    percentages of one core; SD is calculated across the three run means.}
     \label{tab:evaluation-performance-profiles}
 \end{table}
 
-Peak monitor-cgroup memory was 92.17~MiB in the filtered runs and 110.21~MiB in
-the unfiltered runs; peak process \gls{rss} was 36.97 and 41.24~MiB,
-respectively. These maxima describe the retained campaign and are not estimates
-of steady-state memory requirements. All six monitored runs recovered the flag,
-produced one complete alert, had zero restart deltas and contained no matching
-loss diagnostic.
+Peak monitor-container cgroup memory was 92.17~MiB in the filtered runs and
+110.21~MiB in the unfiltered runs; peak cgroup \texttt{total\_rss} was 36.97
+and 41.24~MiB, respectively. These maxima describe the retained campaign and
+are not estimates of steady-state memory requirements. All six monitored runs
+recovered the flag, produced one complete alert, had zero restart deltas and
+contained no matching loss diagnostic.
 
-Node CPU was high in every profile: the means were 93.99\% filtered, 94.49\%
-unfiltered and 93.77\% without the monitor. Mean target CPU was 38.87\%,
-33.64\% and 39.35\%, respectively. The no-monitor values help reveal the
-saturated testbed but are not used to subtract a baseline from monitor CPU.
+Node CPU was high in every profile: the aggregate busy-time fractions across
+the two node CPUs were 93.99\% filtered, 94.49\% unfiltered and 93.77\%
+without the monitor. Mean target-container cgroup CPU, expressed as a
+percentage of one core, was 38.87\%, 33.64\% and 39.35\%, respectively. The
+no-monitor values help reveal the saturated testbed but are not used to
+subtract a baseline from monitor CPU.
 Moreover, final monitor-Pod disappearance in the no-monitor runs was not
 independently timestamped. Run durations and target CPU therefore remain
 contextual and do not support a causal total-overhead comparison.
@@ -377,17 +416,19 @@ contextual and do not support a causal total-overhead comparison.
 The project acceptance gate applies to the monitor's mean CPU consumption and
 requires the filtered profile to remain below 5\% of one core. All three
 filtered run means satisfied the gate, and their aggregate mean was 0.46\%.
-The corresponding unfiltered mean was 5.73\%, above the threshold. Since the
-profiles differed by the exact kernel-side UID admission setting while
-retaining the same scenario and functional checks, the comparison attributes a
-substantial reduction to early rejection of non-target activity before event
-transport and user-space processing.
+The corresponding unfiltered mean was 5.73\%, above the threshold. The profiles
+differed by the exact kernel-side UID admission setting while retaining the
+same scenario and functional checks. The observed difference is therefore
+consistent with early rejection of non-target activity before event transport
+and user-space processing, although the sequential laboratory design does not
+isolate that setting from every source of run-to-run variation.
 
-Relative to the unfiltered monitor-cgroup mean, the filtered mean represents a
-91.97\% reduction. This percentage is specific to monitor-cgroup CPU in the
-evaluated workload. It is not the total cost of eBPF execution, the total node
-overhead, or a production capacity estimate. The preservation of three flag
-recoveries and three complete alerts in each monitored profile shows that the
+Using the unrounded run data, the filtered mean was approximately 92.0\% lower
+than the unfiltered mean. This percentage compares monitor-container cgroup CPU
+and uses the unfiltered mean as its denominator. It is not the total cost of
+eBPF execution, the total node overhead, or a production capacity estimate.
+The preservation of three flag recoveries and three complete alerts in each
+monitored profile shows that the
 configured admission rule retained the evidence required by this scenario.
 
 \section{Discussion of Results}
@@ -405,9 +446,10 @@ The profile comparison shows why admission placement matters. Without exact UID
 filtering, events from unrelated node activity reached transport and user-space
 processing even though later policy and detector logic did not need them. The
 filtered profile rejected that activity in the shared eBPF initialisation path
-and reduced measured monitor-cgroup CPU while retaining the required alert.
-This supports the architectural decision to combine configurable user-space
-analysis with a narrow optional kernel-side control.
+and was associated with lower measured monitor-container cgroup CPU while
+retaining the required alert. This result is consistent with the architectural
+decision to combine configurable user-space analysis with a narrow optional
+kernel-side control.
 
 The experiment does not establish that UID filtering is universally suitable.
 A UID is not a stable Kubernetes workload identity, and two workloads may use
@@ -431,9 +473,10 @@ captured, which prevents a clean baseline subtraction.
 
 \medskip
 \noindent\textbf{Construct validity.}
-Monitor-cgroup CPU measures work charged to that cgroup; it does not include
-all kernel execution induced by eBPF programs and is therefore not total
-overhead. Cgroup memory and process \gls{rss} capture different memory views.
+Monitor-container cgroup CPU measures work charged to that cgroup; it does not
+include all kernel execution induced by eBPF programs and is therefore not
+total overhead. Cgroup memory and cgroup \texttt{total\_rss} capture different
+memory views.
 No matching perf-loss message is evidence only about diagnosed loss, not proof
 of complete transport. Detector completion measures conformance with one
 predefined sequence, while three benign controls cannot establish a general
@@ -453,8 +496,9 @@ this workload and should not be generalised to workload identity.
 Three runs per profile permit a transparent descriptive comparison but do not
 support strong inferential statistics. High node utilisation and unresolved
 no-monitor timing make duration and target-CPU differences unsuitable for
-causal conclusions. The 91.97\% value is consequently reported only for the
-filtered-versus-unfiltered monitor-cgroup CPU means. The monitor was privileged
+causal conclusions. The approximately 92.0\% value is consequently reported
+only for the filtered-versus-unfiltered monitor-container cgroup CPU means.
+The monitor was privileged
 and observational; least-privilege deployment, enforcement and production
 readiness remain outside the evaluated claims.
 
@@ -466,8 +510,8 @@ observed target activity generated through a Service from a separate trigger
 Pod on the same node. The selected benign interaction completed three times
 without an alert, while all three exploit runs recovered the synthetic flag
 and produced one complete four-event alert. Finally, the exact UID-filtered
-profile consumed a mean of 0.46\% of one CPU core in the monitor cgroup, below
-the 5\% project gate and 91.97\% lower than the otherwise equivalent
+profile consumed a mean of 0.46\% of one CPU core in the monitor-container
+cgroup, below the 5\% project gate and approximately 92.0\% lower than the
 unfiltered profile in this campaign.
 
 These findings support the prototype's node-local collection, deterministic
