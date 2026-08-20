@@ -370,26 +370,28 @@ filtered profile and 8.38\% for the unfiltered profile.
 \begin{table}[H]
     \centering
     \footnotesize
-    \setlength{\tabcolsep}{3pt}
+    \setlength{\tabcolsep}{4pt}
     \renewcommand{\arraystretch}{1.14}
-    \begin{tabularx}{\textwidth}{@{}p{0.13\textwidth}p{0.12\textwidth}
-        p{0.19\textwidth}p{0.14\textwidth}p{0.18\textwidth}X@{}}
+    \begin{tabularx}{\textwidth}{@{}l c r r r r X@{}}
         \toprule
-        \textbf{Profile} & \textbf{Samples R1--R3} &
-        \textbf{Run CPU means R1--R3} & \textbf{Mean $\pm$ SD} &
-        \textbf{Run P95 R1--R3} &
-        \textbf{Peak memory / \texttt{total\_rss}} \\
+        \textbf{Profile} & \textbf{Run} &
+        \shortstack{\textbf{Retained}\\\textbf{samples}} &
+        \shortstack{\textbf{Mean CPU}\\\textbf{(\% one core)}} &
+        \shortstack{\textbf{P95 CPU}\\\textbf{(\% one core)}} &
+        \shortstack{\textbf{Peak memory}\\\textbf{(MiB)}} &
+        \shortstack{\textbf{Peak \texttt{total\_rss}}\\\textbf{(MiB)}} \\
         \midrule
-        UID-filtered & 45 / 38 / 46 & 0.46 / 0.47 / 0.44\% &
-        0.46 $\pm$ 0.02 pp & 1.01 / 1.12 / 0.87\% &
-        92.17 / 36.97 MiB \\
-        Unfiltered & 52 / 48 / 52 & 6.43 / 5.48 / 5.28\% &
-        5.73 $\pm$ 0.61 pp & 9.54 / 8.06 / 7.53\% &
-        110.21 / 41.24 MiB \\
+        UID-filtered & R1 & 45 & 0.46 & 1.01 & 90.46 & 36.97 \\
+        UID-filtered & R2 & 38 & 0.47 & 1.12 & 91.20 & 36.09 \\
+        UID-filtered & R3 & 46 & 0.44 & 0.87 & 92.17 & 36.67 \\
+        \addlinespace
+        Unfiltered & R1 & 52 & 6.43 & 9.54 & 93.72 & 40.20 \\
+        Unfiltered & R2 & 48 & 5.48 & 8.06 & 110.21 & 41.24 \\
+        Unfiltered & R3 & 52 & 5.28 & 7.53 & 96.20 & 40.98 \\
         \bottomrule
     \end{tabularx}
-    \caption{Per-run monitor-container cgroup observations. CPU values are
-    percentages of one core; SD is calculated across the three run means.}
+    \caption{Per-run CPU and memory observations for the monitor-container
+    cgroup. Aggregate means and standard deviations are reported in the text.}
     \label{tab:evaluation-performance-profiles}
 \end{table}
 
