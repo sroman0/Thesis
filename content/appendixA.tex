@@ -1,36 +1,20 @@
 % !TEX root = main.tex
-\chapter{Selected eBPF Process-Monitoring Implementations}
+\chapter{Selected eBPF Process-Monitoring Source Code}
 \label{appendix_a}
 
-This appendix presents selected excerpts from
-\path{pkg/ebpf/c/project.bpf.c}. The purpose is to preserve the implementation
-details that best illustrate process monitoring without reproducing the full
-eBPF translation unit. Chapter~4 owns the architectural interpretation of the
-hooks, their observation boundaries and the shared event-construction
-framework. The excerpts below instead show how those decisions appear in the
-collector source.
-
-All listings reflect the implementation used for the thesis and are abridged
-where repeated initialisation or serialisation calls would obscure the central
-mechanism. Omitted statements are marked explicitly. Argument indexes remain
-visible when they help demonstrate the binary contract with the user-space
-event registry.
+The following excerpts are taken from
+\path{pkg/ebpf/c/project.bpf.c}. Repeated initialisation and serialisation
+statements are omitted where indicated; the complete implementation remains in
+the project repository.
 
 \section{Process Creation}
 \label{sec:appendix-process-creation}
 
-The \texttt{clone} implementation is a concrete use of the paired-producer
-model introduced in Section~\ref{sec:implementation-ebpf-programs}. Entry-side
-fields are retained under the current thread and logical event; the return
-probe removes that temporary state before constructing the event. Listing
-\ref{lst:appendix-clone-pair} keeps the fields that distinguish \texttt{clone}
-from the simpler \texttt{fork} and \texttt{vfork} paths.
-
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\scriptsize,
-    caption={Entry/return construction of the \texttt{clone} event
-    (abridged).},
+    caption={Entry and return programs used to construct the
+    \texttt{clone} event. Repeated serialisation calls are omitted.},
     label={lst:appendix-clone-pair}
 ]
 SEC("tracepoint/syscalls/sys_enter_clone")
@@ -68,23 +52,11 @@ int tracepoint__syscalls__sys_exit_clone(sys_exit_generic_ctx_t *ctx)
 }
 \end{lstlisting}
 
-The saved values remain opaque addresses where the syscall exposes pointers;
-the collector does not dereference the parent-TID, child-TID or stack fields.
-Deleting the entry before submission also ensures that a later invocation on
-the same thread cannot consume stale construction state.
-
-The scheduler tracepoint supplies a different form of evidence: both task
-objects already exist when the program runs. Listing
-\ref{lst:appendix-sched-process-fork} shows the extraction of stable local
-process identity used by later correlation. It is included here rather than in
-Chapter~4 so that the body can explain the distinction without carrying the
-complete serialisation sequence.
-
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\scriptsize,
-    caption={Parent-child evidence collected by
-    \texttt{sched\_process\_fork} (abridged).},
+    caption={Parent-child identity collected by
+    \texttt{sched\_process\_fork}.},
     label={lst:appendix-sched-process-fork}
 ]
 struct task_struct *parent =
@@ -110,24 +82,14 @@ save_to_submit_buf(&p.event->args_buf,
                    &child_start, sizeof(u64), 4);
 \end{lstlisting}
 
-The start time complements the numeric identifiers because a later task may
-reuse the same PID. The event still represents one bounded relationship; the
-eBPF program does not retain a process tree.
-
 \section{Executable Transitions}
 \label{sec:appendix-executable-transitions}
-
-Execution monitoring begins while pathname and argument-vector pointers still
-refer to the caller's address space. Listing
-\ref{lst:appendix-exec-requests} shows the dedicated syscall tracepoints. The
-shared string-array helper limits traversal to 38 entries and also remains
-bounded by the event buffer capacity.
 
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\scriptsize,
-    caption={Capturing \texttt{execve} and \texttt{execveat} requests
-    (abridged).},
+    caption={Collection of \texttt{execve} and \texttt{execveat}
+    requests at syscall entry.},
     label={lst:appendix-exec-requests}
 ]
 SEC("tracepoint/syscalls/sys_enter_execve")
@@ -168,21 +130,12 @@ int tracepoint__syscalls__sys_enter_execveat(sys_enter_execveat_ctx_t *ctx)
 }
 \end{lstlisting}
 
-The two producers use different schemas because \texttt{execveat} must retain
-its directory descriptor and flags. Neither reads the environment array or
-waits for a syscall result; their role is to preserve the original request.
-
-After pathname resolution, \texttt{security\_bprm\_check} can identify the
-kernel file rather than only the caller's string. A later scheduler tracepoint
-confirms replacement of the executable image. Listing
-\ref{lst:appendix-exec-kernel-stages} places the essential extraction performed
-at these two boundaries side by side.
-
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\scriptsize,
-    caption={Resolved binary identity and successful executable transition
-    (abridged from two hooks).},
+    caption={Resolved binary identity and successful executable transition,
+    abridged from \texttt{security\_bprm\_check} and
+    \texttt{sched\_process\_exec}.},
     label={lst:appendix-exec-kernel-stages}
 ]
 /* security_bprm_check: resolved executable under mediation. */
@@ -219,20 +172,10 @@ save_str_to_buf(&p.event->args_buf, (void *) filename, 0);
 events_perf_submit(&p);
 \end{lstlisting}
 
-These statements come from independent programs and do not imply that the
-collector joins the two records in kernel space. Their schemas deliberately
-preserve mediation and successful transition as separate observations.
-
-Failure requires the opposite outcome test. The entry program retains the
-request, and the exit program emits only a negative result. Listing
-\ref{lst:appendix-process-execute-failed} contains the return-side logic moved
-from Chapter~4.
-
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\scriptsize,
-    caption={Return-side emission of failed executable transitions
-    (abridged).},
+    caption={Return-side emission of failed executable transitions.},
     label={lst:appendix-process-execute-failed}
 ]
 args_t args = {};
@@ -265,24 +208,14 @@ save_to_submit_buf(&p.event->args_buf,
 return events_perf_submit(&p);
 \end{lstlisting}
 
-Removing the saved arguments before the sign test makes both outcomes consume
-their temporary entry. Successful execution is represented by the scheduler
-event; only failure reaches this producer's submission call.
-
-\section{Credential Transition Filtering}
+\section{Credential Transitions}
 \label{sec:appendix-credential-transition}
-
-The selected credential excerpt illustrates early semantic filtering rather
-than the generic UID admission described in Chapter~4. The
-\path{security_task_fix_setuid} hook receives both the existing and
-proposed credentials. Listing~\ref{lst:appendix-fix-setuid} shows that an event
-is serialised and submitted only when at least one monitored UID field changes.
 
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\scriptsize,
-    caption={Change-only capture in
-    \texttt{security\_task\_fix\_setuid} (abridged).},
+    caption={Change-only collection in
+    \texttt{security\_task\_fix\_setuid}.},
     label={lst:appendix-fix-setuid}
 ]
 u32 old_uid = BPF_CORE_READ(old_cred, uid.val);
@@ -313,16 +246,3 @@ save_to_submit_buf(&p.event->args_buf,
                    &flags, sizeof(int), 8);
 return events_perf_submit(&p);
 \end{lstlisting}
-
-The comparison removes no-change invocations before transport, while the
-event that remains preserves both sides of the proposed transition. It does
-not turn the mediation hook into confirmation that the new credentials were
-installed; that distinction remains owned by the architectural discussion in
-Section~\ref{subsubsec:implementation-identity-credentials}.
-
-These excerpts cover the process mechanisms that benefit most from source-level
-inspection: entry/return state, stable lifecycle identity, bounded user-memory
-capture, resolved executable evidence, explicit outcome selection and
-change-only credential emission. The remaining process hooks reuse these
-patterns or perform direct bounded serialisation and are therefore left in the
-repository rather than reproduced here.
