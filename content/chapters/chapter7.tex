@@ -1,0 +1,178 @@
+\chapter{Conclusions and Future Work}
+\label{ch:conclusions-future-work}
+
+The work presented in this thesis achieved its scoped objective: it produced
+and evaluated a node-local runtime security monitoring prototype for the
+selected Rocky Linux environment. The result is not a general security
+platform, but an end-to-end implementation that connects bounded kernel
+observations to typed evidence and deterministic local detection. The
+conclusions that follow are therefore grounded in the implemented event domain
+and in the controlled evaluation reported in
+Chapter~\ref{ch:experimental-evaluation}.
+
+\section{Summary of the Work}
+\label{sec:conclusions-summary-work}
+
+The central problem was to collect heterogeneous process and security-related
+kernel observations without making the collection layer responsible for their
+complete interpretation. The resulting architecture assigns constrained data
+extraction and optional early admission to \gls{ebpf}, while the Go runtime
+owns record normalisation, monitoring scope, detection and presentation. A
+shared event contract connects these responsibilities so that observations
+from different physical hooks can enter one logical event model.
+
+In kernel space, the prototype combines complementary observation points to
+retain different stages of an operation, including requests, security
+mediation, committed transitions and returned outcomes. Direct and paired
+producers use a common bounded construction framework, while selective probe
+planning activates only the producers and support programs required by the
+chosen logical events. Exact \gls{uid} admission can reject observations before
+full enrichment and transport when the monitored subject has a suitable fixed
+identity. Compatibility work based on CO-RE, explicit layout branches and
+verifier-visible bounds allows these mechanisms to operate on the verified
+Rocky Linux kernel rather than assuming unconditional support across Linux
+versions.
+
+In user space, schema-directed decoding converts perf-buffer records into the
+typed event representation shared by later components. Policies define the
+relevant event domain and suppression decisions, whereas detectors evaluate
+the admitted evidence. Point detectors act on one event, and collective
+detectors retain bounded local state for short ordered sequences. Alerts
+preserve the observations responsible for a match and may propagate
+\gls{attack} tactics and techniques as classification metadata. Together,
+these components form an engineering integration contribution: established
+kernel instrumentation and rule-based detection mechanisms were combined into
+a compact pipeline adapted to a constrained enterprise-kernel target.
+
+\section{Main Results}
+\label{sec:conclusions-main-results}
+
+The functional campaign established the intended node-local observation
+boundary. In the single-node Minikube testbed, the monitor, vulnerable target
+and trigger ran in three separate Pods. All three exploit repetitions recovered
+the synthetic flag and produced one complete alert containing the configured
+four-event sequence. The three repetitions of the selected benign interaction
+produced the expected application response without completing that alert. The
+result demonstrates repeatable same-node, cross-Pod visibility and detection
+for this controlled scenario. It does not establish cross-node collection,
+general detection accuracy, a false-positive rate or validation of every event
+and correlation strategy. In particular, the experiment exercised the
+same-process path of the selected collective detector rather than its complete
+set of possible process relationships.
+
+The performance comparison also supports the value of narrow early admission
+under the measured conditions. Across three runs, the exact UID-filtered
+profile consumed a mean of 0.46\% of one \gls{cpu} core in the monitor-container
+cgroup, and every filtered run remained below the project's 5\% gate. The
+corresponding unfiltered mean was 5.73\%; using the retained data, the filtered
+mean was approximately 92.0\% lower while flag recovery and the complete alert
+were preserved in every monitored run. This measurement concerns CPU charged
+to the monitor cgroup as a percentage of one core. It excludes kernel work
+charged elsewhere and must not be interpreted as total eBPF, node or system
+overhead. It nevertheless provides scenario-specific evidence that discarding
+irrelevant observations before transport can substantially reduce the demand
+placed on the user-space monitoring path.
+
+During the retained functional and monitored performance runs, no matching
+perf-event loss diagnostic and no Pod restart delta were observed. These are
+operational indicators rather than an independent proof of complete delivery.
+Taken together, the results show that the principal architectural path worked
+on the selected target and that its most restrictive filtering profile met the
+defined resource objective without removing the evidence required by the
+configured detector.
+
+\section{Limitations}
+\label{sec:conclusions-limitations}
+
+The prototype's technical assurance remains narrower than its implemented
+event surface. Kernel and Go representations of the event contract are
+maintained separately, so consistency depends on review and cross-registry
+tests rather than generation from one source. The current registry gate also
+exposes an unresolved classification inconsistency: an internal socket support
+probe is treated as a public producer despite having no decoder schema.
+Object-backed tests do not yet exercise every loading, attachment,
+partial-initialisation and cleanup path on the target kernel. External policy
+and detector documents are validated semantically, but unknown YAML fields are
+not rejected strictly. Collective state is bounded, whereas some maintenance
+and alert-deduplication behaviour still depends on subsequent traffic and does
+not have equally strong capacity guarantees.
+
+The analytical and operational scope is intentionally local. Detection is
+deterministic and configuration driven; the system neither discovers unknown
+behaviour through a learned baseline nor reconstructs persistent process or
+cluster graphs. Correlation keys describe local processes, resources and
+cgroups rather than Kubernetes workload identities. The prototype observes and
+reports activity but does not enforce decisions. Its laboratory deployment also
+used a privileged, unconfined monitor with host interfaces mounted into its
+Pod, so a least-privilege operational profile was not established.
+
+The evaluation further limits the breadth of the conclusions. It covered one
+enterprise kernel, one two-core Minikube node, one vulnerable workload and one
+scenario-specific collective detector, with three repetitions per condition.
+High node utilisation restricts causal interpretation of workload timing, and
+monitor-cgroup CPU does not account for all kernel-side cost. Transport health
+was inferred from emitted diagnostics rather than from a known-volume
+end-to-end completeness counter. Consequently, the campaign supports a
+transparent engineering demonstration, not production readiness, broad
+portability, loss-free delivery or statistical claims about detection quality.
+
+\section{Future Work}
+\label{sec:conclusions-future-work}
+
+The first priority is to strengthen the event contract and registry boundary.
+The current support-probe inconsistency should be corrected before extending
+the public event catalogue. Event identifiers, argument schemas, probe
+exposure and binary layout metadata should then be derived from a reviewed
+single source where practical, with consistency checks made mandatory in
+continuous integration. This would turn interface agreement from a convention
+into a continuously verified property and reduce the risk that a valid kernel
+record becomes undecodable after an isolated change.
+
+The second priority is broader object-backed lifecycle and compatibility
+testing. Deterministic tests should cover object resolution, selective
+autoload, map configuration, each attachment route, rollback after partial
+failure, cancellation and cleanup. These tests should be complemented by a
+small privileged smoke suite on the supported Rocky Linux kernel, because
+mocked or component-level tests cannot establish symbol availability, verifier
+acceptance or successful attachment on the deployment target. Additional
+kernel versions should be introduced only with explicit capability evidence,
+rather than by generalising the current compatibility claim.
+
+The third priority is to harden external configuration and bounded runtime
+state. Strict, field-aware YAML decoding would make misspelled or unsupported
+keys fail during startup instead of being silently ignored. Canonical decoder
+fixtures should exercise malformed and boundary-sized records. Collective
+sequence expiry and alert deduplication should receive independent maintenance
+and explicit capacity limits, so that idle workloads do not postpone cleanup
+and sustained alert diversity cannot grow state without a defined bound.
+
+The fourth priority combines measurable transport health with a broader
+evaluation matrix. Cumulative counters for attempted submissions, successful
+receipts, reported drops and decoding failures would support a stronger
+end-to-end accounting model than diagnostic messages alone. Stress tests with
+known event volumes, longer monitoring periods and varied event rates could then
+determine where perf-buffer capacity or user-space processing becomes the
+limiting factor. Repeating the functional and resource evaluation across
+representative kernels, workloads and detector sets would show whether the
+observed filtering benefit persists beyond the present controlled scenario.
+A different transport mechanism should be considered only after these
+measurements identify a concrete limitation.
+
+The fifth priority is safer deployment and a defined external integration
+boundary. The capabilities, security context and host mounts required by each
+probe family should be measured so that a reduced-privilege node deployment can
+be derived and tested. For contexts unavailable to a local agent, a versioned
+event and alert export contract could support optional aggregation outside the
+monitor. Such an extension should preserve the current boundary: cluster-wide
+identity and reasoning would belong to the external platform, not be inferred
+from local UIDs or cgroup identifiers. Enforcement or learned contextual
+detection would require separate threat models and evaluations rather than
+being treated as straightforward additions to this prototype.
+
+Overall, this thesis shows that useful runtime monitoring on a constrained
+enterprise kernel depends less on collecting the largest possible event
+catalogue than on preserving selective, well-defined evidence from observation
+to alert. The implemented pipeline provides that foundation for the evaluated
+node-local scenario. Stronger contract assurance, broader validation and a
+safer deployment profile are the necessary steps for extending it without
+weakening the explicit boundaries that make its results interpretable.
