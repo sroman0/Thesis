@@ -1,4 +1,304 @@
 % !TEX root = main.tex
-\chapter{Appendix A}
+\chapter{Event and Hook Catalogue}
 \label{appendix_a}
-Appendix text here.
+
+This appendix provides a compact reference between the logical events exposed
+to user space and the kernel observation points that produce them. It
+complements the implementation discussion in Chapters~4 and~5 without
+repeating event payloads, helper internals or detector semantics. Event names
+are grouped only when they share the same observation boundary and producer
+model.
+
+In the tables, a \emph{direct} producer submits an event from one hook, whereas
+a \emph{paired} producer combines information retained at entry with the value
+available at return. A \emph{shared capture path} means that several logical
+network events are emitted by the same cgroup programs according to the
+decoded packet content. The catalogue treats an event as public only when it
+has a user-space decoder schema. At the inspected revision,
+\path{security_socket_sendmsg} is still exposed by the probe registry despite
+lacking such a schema; it is therefore recorded below only as an internal
+network-support hook, consistently with the limitation identified in
+Chapter~7.
+
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \renewcommand{\arraystretch}{1.10}
+    \begin{tabularx}{\textwidth}{@{}p{0.29\textwidth}p{0.35\textwidth}X@{}}
+        \toprule
+        \textbf{Logical event} & \textbf{Physical observation point} &
+        \textbf{Boundary and production model} \\
+        \midrule
+        \path{fork}, \path{vfork} &
+        \path{syscalls/sys_enter_*} and \path{syscalls/sys_exit_*} &
+        Syscall result emitted at exit; the entry programs retain no request
+        fields. \\
+        \path{clone} &
+        \path{syscalls/sys_enter_clone} and \path{syscalls/sys_exit_clone} &
+        Syscall request/result; paired. \\
+        \path{sched_process_fork} &
+        raw tracepoint \path{sched_process_fork} &
+        Completed task creation; direct. \\
+        \path{task_rename} &
+        raw tracepoint \path{task_rename} &
+        Task-name transition; direct. \\
+        \path{sched_process_exit} &
+        raw tracepoint \path{sched_process_exit} &
+        Task termination; direct. \\
+        \path{execve}, \path{execveat} &
+        \path{syscalls/sys_enter_execve} and
+        \path{syscalls/sys_enter_execveat} &
+        Executable-replacement request; direct entry observations. \\
+        \path{security_bprm_check},
+        \path{security_bprm_creds_for_exec} &
+        kprobes on the corresponding LSM hooks &
+        Binary mediation and credential preparation; direct. \\
+        \path{sched_process_exec} &
+        raw tracepoint \path{sched_process_exec} &
+        Completed executable transition; direct. \\
+        \path{process_execute_failed} &
+        entry/exit tracepoints for \path{execve} and \path{execveat} &
+        Failed executable-replacement result; four physical programs produce
+        one logical event. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Process-lifecycle and executable-transition events.}
+    \label{tab:appendix-process-events}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \renewcommand{\arraystretch}{1.10}
+    \begin{tabularx}{\textwidth}{@{}p{0.29\textwidth}p{0.35\textwidth}X@{}}
+        \toprule
+        \textbf{Logical event} & \textbf{Physical observation point} &
+        \textbf{Boundary and production model} \\
+        \midrule
+        \path{setuid}, \path{setgid}, \path{setreuid},
+        \path{setregid}, \path{setresuid}, \path{setresgid},
+        \path{setfsuid}, \path{setfsgid} &
+        matching syscall entry/exit tracepoints &
+        Identity-change request/result; one paired producer set per syscall. \\
+        \path{security_task_fix_setuid} &
+        kprobe \path{security_task_fix_setuid} &
+        Proposed UID transition under mediation; direct. \\
+        \path{commit_creds} &
+        kprobe \path{commit_creds} &
+        Installed credential transition; direct. \\
+        \path{cap_capable} &
+        kprobe \path{cap_capable} &
+        Capability check; direct mediation observation. \\
+        \path{ptrace} &
+        \path{syscalls/sys_enter_ptrace} and
+        \path{syscalls/sys_exit_ptrace} &
+        Process-control request/result; paired. \\
+        \path{security_task_kill} &
+        kprobe \path{security_task_kill} &
+        Signal-delivery mediation; direct. \\
+        \path{security_task_prctl} &
+        kprobe \path{security_task_prctl} &
+        Process-control mediation; direct. \\
+        \path{do_sigaction} &
+        kprobe \path{do_sigaction} &
+        Signal-handler update request; direct. \\
+        \path{security_task_setrlimit} &
+        kprobe \path{security_task_setrlimit} &
+        Resource-limit mediation; direct. \\
+        \path{prlimit64} &
+        \path{syscalls/sys_enter_prlimit64} and
+        \path{syscalls/sys_exit_prlimit64} &
+        Resource-limit request/result; paired. \\
+        \path{security_settime64} &
+        kprobe \path{security_settime64} &
+        Wall-clock change under mediation; direct. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Identity, credential and process-control events.}
+    \label{tab:appendix-identity-events}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \renewcommand{\arraystretch}{1.10}
+    \begin{tabularx}{\textwidth}{@{}p{0.29\textwidth}p{0.35\textwidth}X@{}}
+        \toprule
+        \textbf{Logical event} & \textbf{Physical observation point} &
+        \textbf{Boundary and production model} \\
+        \midrule
+        \path{open} &
+        entry/exit tracepoints for \path{open} and \path{openat} &
+        File-open request/result; four programs produce one logical event. \\
+        \path{chmod} &
+        entry/exit tracepoints for \path{chmod}, \path{fchmod} and
+        \path{fchmodat} &
+        Mode-change request/result; six programs produce one logical event. \\
+        \path{chown} &
+        entry/exit tracepoints for \path{chown}, \path{fchown},
+        \path{fchownat} and \path{lchown} &
+        Ownership-change request/result; eight programs produce one logical
+        event. \\
+        \path{security_file_open} &
+        kprobe \path{security_file_open} &
+        Resolved file-open mediation; direct. \\
+        \path{security_file_permission} &
+        kprobe \path{security_file_permission} &
+        Resolved file permission check; direct. \\
+        \path{security_file_ioctl} &
+        kprobe \path{security_file_ioctl} &
+        File-control mediation; direct. \\
+        \path{security_inode_unlink},
+        \path{security_inode_rename} &
+        kprobes on the corresponding inode LSM hooks &
+        Directory-entry removal or movement under mediation; direct. \\
+        \path{security_inode_symlink},
+        \path{security_inode_mknod} &
+        kprobes on the corresponding inode LSM hooks &
+        Directory-entry creation under mediation; direct. \\
+        \path{security_sb_mount}, \path{security_sb_umount} &
+        kprobes on the corresponding superblock LSM hooks &
+        Mount-topology operation under mediation; direct. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{File and filesystem-security events.}
+    \label{tab:appendix-filesystem-events}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \renewcommand{\arraystretch}{1.10}
+    \begin{tabularx}{\textwidth}{@{}p{0.29\textwidth}p{0.35\textwidth}X@{}}
+        \toprule
+        \textbf{Logical event} & \textbf{Physical observation point} &
+        \textbf{Boundary and production model} \\
+        \midrule
+        \path{memfd_create} &
+        matching syscall entry/exit tracepoints &
+        Anonymous-file creation request/result; paired. \\
+        \path{mmap}, \path{mprotect}, \path{pkey_mprotect} &
+        matching syscall entry/exit tracepoints &
+        Address-space request/result; one paired producer set per syscall. \\
+        \path{process_vm_readv}, \path{process_vm_writev} &
+        matching syscall entry/exit tracepoints &
+        Cross-process memory-transfer request/result; paired. \\
+        \path{security_mmap_file} &
+        kprobe \path{security_mmap_file} &
+        File-backed mapping under mediation; direct. \\
+        \path{security_file_mprotect} &
+        kprobe \path{security_file_mprotect} &
+        VMA protection change under mediation; direct. \\
+        \path{setns}, \path{unshare} &
+        matching syscall entry/exit tracepoints &
+        Namespace-change request/result; paired. \\
+        \path{switch_task_ns} &
+        kprobe \path{switch_task_namespaces} &
+        Installed namespace-set transition; direct. \\
+        \path{cgroup_attach_task} &
+        raw tracepoint \path{cgroup_attach_task} &
+        Task-to-cgroup attachment; direct. \\
+        \path{cgroup_mkdir}, \path{cgroup_rmdir} &
+        corresponding raw cgroup tracepoints &
+        Local cgroup lifecycle; direct. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Memory, namespace and cgroup-transition events.}
+    \label{tab:appendix-memory-namespace-events}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \renewcommand{\arraystretch}{1.10}
+    \begin{tabularx}{\textwidth}{@{}p{0.29\textwidth}p{0.35\textwidth}X@{}}
+        \toprule
+        \textbf{Logical event} & \textbf{Physical observation point} &
+        \textbf{Boundary and production model} \\
+        \midrule
+        \path{module_load}, \path{module_free} &
+        corresponding raw module tracepoints &
+        Module lifecycle; direct. \\
+        \path{do_init_module} &
+        kprobe/kretprobe \path{do_init_module} &
+        Module-initialisation request/result; paired. \\
+        \path{security_bpf} &
+        kprobe \path{security_bpf} &
+        BPF command under mediation; direct. \\
+        \path{security_bpf_map}, \path{security_bpf_prog} &
+        corresponding kprobes &
+        BPF object under mediation; direct. \\
+        \path{register_kprobe} &
+        kprobe/kretprobe \path{register_kprobe} &
+        Dynamic-probe registration request/result; paired. \\
+        \path{kallsyms_lookup_name} &
+        kprobe/kretprobe \path{kallsyms_lookup_name} &
+        Kernel-symbol lookup request/result; paired. \\
+        \path{proc_create} &
+        kprobe \path{proc_create} &
+        procfs entry-creation request; direct. \\
+        \path{call_usermodehelper} &
+        kprobe \path{call_usermodehelper} &
+        Kernel request to start a user-space helper; direct. \\
+        \path{security_kernel_read_file},
+        \path{security_kernel_post_read_file} &
+        corresponding kernel-file LSM kprobes &
+        Pre-read and post-read mediation stages; independent direct events. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Kernel-integrity and kernel-facing activity events.}
+    \label{tab:appendix-kernel-events}
+\end{table}
+
+\begin{table}[H]
+    \centering
+    \scriptsize
+    \renewcommand{\arraystretch}{1.10}
+    \begin{tabularx}{\textwidth}{@{}p{0.29\textwidth}p{0.35\textwidth}X@{}}
+        \toprule
+        \textbf{Logical event} & \textbf{Physical observation point} &
+        \textbf{Boundary and production model} \\
+        \midrule
+        \path{security_socket_create},
+        \path{security_socket_listen},
+        \path{security_socket_connect} &
+        corresponding socket LSM kprobes &
+        Socket creation, listening or connection under mediation; direct. \\
+        \path{security_socket_accept},
+        \path{security_socket_bind},
+        \path{security_socket_setsockopt} &
+        corresponding socket LSM kprobes &
+        Socket acceptance, binding or option change under mediation; direct. \\
+        \path{net_flow_base}, \path{net_packet_raw},
+        \path{net_packet_ip} &
+        cgroup/skb ingress and egress programs &
+        Shared capture path; logical form selected from packet parsing. \\
+        \path{net_packet_tcp}, \path{net_packet_udp},
+        \path{net_packet_icmp}, \path{net_packet_icmpv6} &
+        cgroup/skb ingress and egress programs &
+        Shared capture path; transport or control protocol classification. \\
+        \path{net_packet_dns}, \path{net_packet_http},
+        \path{net_packet_tls} &
+        cgroup/skb ingress and egress programs &
+        Shared capture path; bounded application-protocol classification. \\
+        \midrule
+        \multicolumn{3}{@{}l@{}}{\textit{Internal dependencies activated with the cgroup/skb capture path:}} \\
+        \path{sock_alloc_file} entry/return,
+        \path{security_sk_clone},
+        \path{security_socket_recvmsg},
+        \path{security_socket_sendmsg},
+        \path{__cgroup_bpf_run_filter_skb} &
+        kprobes and one kretprobe &
+        Maintain socket, process and direction context; not independent decoded
+        event schemas. \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Socket and network-capture events and their support probes.}
+    \label{tab:appendix-network-events}
+\end{table}
+
+The catalogue describes the implemented observation surface, not an assertion
+that every hook is available on every Linux version. Selection determines
+which registered producers and dependencies are considered for loading;
+successful relocation, verification and attachment remain properties of the
+target kernel and runtime environment.
