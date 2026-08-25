@@ -181,38 +181,9 @@ or error.
 
 The \texttt{sched\_process\_fork} tracepoint runs after the child task exists and
 receives both task structures. It records the host \gls{pid} and \gls{tid} of
-parent and child, together with the child's start time. Listing
-\ref{lst:sched-process-fork-evidence} shows this effect-level evidence.
-
-\begin{lstlisting}[
-    language=C,
-    basicstyle=\ttfamily\footnotesize,
-    caption={Parent-child evidence collected by
-    \texttt{sched\_process\_fork} (abridged).},
-    label={lst:sched-process-fork-evidence}
-]
-struct task_struct *parent =
-    (struct task_struct *) ctx->args[0];
-struct task_struct *child =
-    (struct task_struct *) ctx->args[1];
-
-u32 parent_pid = get_task_host_tgid(parent);
-u32 parent_tid = get_task_host_pid(parent);
-u32 child_pid = get_task_host_tgid(child);
-u32 child_tid = get_task_host_pid(child);
-u64 child_start = get_task_start_time(child);
-
-save_to_submit_buf(&p.event->args_buf,
-                 &parent_pid, sizeof(u32), 0);
-save_to_submit_buf(&p.event->args_buf,
-                 &parent_tid, sizeof(u32), 1);
-save_to_submit_buf(&p.event->args_buf,
-                 &child_pid, sizeof(u32), 2);
-save_to_submit_buf(&p.event->args_buf,
-                   &child_tid, sizeof(u32), 3);
-save_to_submit_buf(&p.event->args_buf,
-                   &child_start, sizeof(u64), 4);
-\end{lstlisting}
+parent and child, together with the child's start time. The corresponding
+source excerpt is retained in
+Listing~\ref{lst:appendix-sched-process-fork} of Appendix~\ref{appendix_a}.
 
 Because PIDs and TIDs can be reused, the start time lets user space distinguish
 separate task lifetimes with the same numeric identifier. The same combination
@@ -277,47 +248,9 @@ file descriptor, requested pathname, flags and negative return value.
 
 The failure event uses paired entry and exit programs because the pathname and
 execution options are available before the syscall runs, while the error is
-available only when it returns. Listing~\ref{lst:process-execute-failed}
-shows the return-side selection that suppresses successful executions.
-
-\begin{lstlisting}[
-    language=C,
-    basicstyle=\ttfamily\footnotesize,
-    caption={Return-side emission of failed executable transitions
-    (abridged).},
-    label={lst:process-execute-failed}
-]
-args_t args = {};
-if (load_args(&args, PROCESS_EXECUTE_FAILED) != 0)
-    return 0;
-
-del_args(PROCESS_EXECUTE_FAILED);
-
-if (ret >= 0)
-    return 0;
-
-program_data_t p = {};
-if (!init_program_data(&p, ctx, PROCESS_EXECUTE_FAILED))
-    return 0;
-
-int operation = (int) args.args[0];
-int dirfd = (int) args.args[1];
-const char *pathname = (const char *) args.args[2];
-int flags = (int) args.args[3];
-
-save_to_submit_buf(&p.event->args_buf,
-                   &operation, sizeof(operation), 0);
-save_to_submit_buf(&p.event->args_buf,
-                   &dirfd, sizeof(dirfd), 1);
-if (pathname)
-    save_str_to_buf(&p.event->args_buf, pathname, 2);
-save_to_submit_buf(&p.event->args_buf,
-                   &flags, sizeof(flags), 3);
-save_to_submit_buf(&p.event->args_buf,
-                   &ret, sizeof(ret), 4);
-
-return events_perf_submit(&p);
-\end{lstlisting}
+available only when it returns. The return-side implementation is shown in
+Listing~\ref{lst:appendix-process-execute-failed} of
+Appendix~\ref{appendix_a}.
 
 The return program removes saved state before testing the result. Success only
 clears the temporary entry; a negative value is serialised with the original
