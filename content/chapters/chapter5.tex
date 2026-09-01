@@ -13,8 +13,8 @@ The user-space workflow begins with a Cobra command-line interface
 invokes the application entry point. Policy loading, detector evaluation and
 eBPF attachment remain outside Cobra.
 
-Defaults provide the host BTF path, JSON event and alert output, console
-diagnostics and an informational log level. CLI flags update event selection,
+Defaults provide the host BTF path, \gls{json} event and alert output, console
+diagnostics and an informational log level. \gls{cli} flags update event selection,
 kernel filtering, policy and detector paths, output, logging and eBPF input.
 The resulting typed structure is passed through the runtime instead of a loose
 set of command-line values.
@@ -79,7 +79,7 @@ After validation, the bootstrap phase resolves the artefacts required to load
   the compiled eBPF object.
 
 Policies and detectors are prepared before the eBPF module is opened. A disjoint 
-finite policy and CLI selection fails startup, avoiding an empty set being interpreted
+finite policy and \gls{cli} selection fails startup, avoiding an empty set being interpreted
 as ``all events''. Selecting a detector does not enable its kernel events independently: 
 its inputs must already be in scope.
 
@@ -528,17 +528,17 @@ identity. The deduplication map also has no independent capacity limit.
 \label{sec:implementation-output-logging}
 
 The output package formats the decoded model; it does not normalise it again.
-Events become JSON or compact text, while alerts add detector identity,
-severity, ordered evidence and optional threat metadata. JSON preserves typed
+Events become \gls{json} or compact text, while alerts add detector identity,
+severity, ordered evidence and optional threat metadata. \gls{json} preserves typed
 values and can add readable labels; compact text supports interactive use.
 
 Events and alerts both use standard output but have independent format settings,
 so one run can produce a mixed stream. \texttt{alerts-only} suppresses event
 presentation without disabling detection. Point alerts contain one source
-event; collective alerts preserve ordered evidence in JSON and a bounded
+event; collective alerts preserve ordered evidence in \gls{json} and a bounded
 sequence in compact text.
 
-Zap writes operational diagnostics to standard error in console or JSON form
+Zap writes operational diagnostics to standard error in console or \gls{json} form
 at debug, info, warn or error level \cite{uber_zap}. These include lifecycle and
 selected libbpf messages, perf-buffer losses, and decoder, detector or output
 failures. Zap never serialises monitored events or alerts, keeping

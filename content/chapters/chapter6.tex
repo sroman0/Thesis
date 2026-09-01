@@ -124,7 +124,7 @@ The testbed ran on an x86-64 Rocky Linux 8.10 host. Minikube v1.38.1 used its
 Docker driver to create one node configured with two CPUs and 4096~MiB of memory
 \cite{minikube_docker_driver}. The Kubernetes server was v1.30.0; the host
 client was v1.36.3. The node reported \path{docker://29.2.1} as its container
-runtime, while the host Docker CLI was v26.1.3. The CPU and memory values are
+runtime, while the host Docker \gls{cli} was v26.1.3. The CPU and memory values are
 the requested Minikube configuration because realised allocatable resources
 were not preserved as experimental evidence.
 
@@ -147,12 +147,12 @@ Service address was \texttt{10.102.19.49} and its target endpoint was
         \midrule
         Host and node & Rocky Linux 8.10; one Docker-backed Minikube node; &
         Two CPUs and 4096~MiB requested; no multi-node observation. \\
-        Monitor & DaemonSet; UID/GID 0; privileged; & host BTF mounted
+        Monitor & DaemonSet; UID/\gls{gid} 0; privileged; & host BTF mounted
         read-only; bpffs and tracefs mounted read-write. \\
-        Target & Single-replica Deployment; UID/GID 10001; non-root & All
+        Target & Single-replica Deployment; UID/\gls{gid} 10001; non-root & All
         capabilities dropped, privilege escalation disabled, read-only root
         filesystem; the synthetic flag Secret is mounted only here. \\
-        Trigger & Standalone Pod; UID/GID 10002; non-root & Same capability and
+        Trigger & Standalone Pod; UID/\gls{gid} 10002; non-root & Same capability and
         filesystem restrictions as the target. \\
         \bottomrule
     \end{tabularx}
@@ -267,14 +267,14 @@ Within each alert, all four records carried UID 10001 and the same stable host
 process identity. The experiment therefore exercised the same-process branch
 of \texttt{process\_tree} correlation.
 
-The following listing is a field projection of the original JSON alert emitted
+The following listing is a field projection of the original \gls{json} alert emitted
 during exploit run E1. The values are taken directly from the retained monitor
 log; timestamps and context fields not required to interpret the detector
 sequence are excluded from the projection.
 
 \begin{lstlisting}[
       basicstyle=\ttfamily\scriptsize,
-      caption={Selected fields from the JSON alert emitted during exploit run E1.},
+      caption={Selected fields from the \gls{json} alert emitted during exploit run E1.},
       label={lst:evaluation-alert-e1}
   ]
   {
@@ -492,7 +492,7 @@ cgroup. The \texttt{memory.usage\_in\_bytes} value represents the overall memory
 accounted to the cgroup, whereas \texttt{total\_rss} from
 \texttt{memory.stat} represents its resident-memory component, including
 descendant cgroups. The latter is a container-cgroup measurement and should not
-be interpreted as the RSS reported for the monitor process alone through
+be interpreted as the \gls{rss} reported for the monitor process alone through
 \texttt{/proc}.
 
 Each profile was run once in each of three rounds, and their relative order was
@@ -579,9 +579,6 @@ Using the unrounded run data, the filtered mean was approximately 92.0\% lower
 than the unfiltered mean. This percentage compares monitor-container cgroup CPU
 and uses the unfiltered mean as its denominator. It is not the total cost of
 eBPF execution, the total node overhead, or a production capacity estimate.
-The preservation of three flag recoveries and three complete alerts in each
-monitored profile shows that the
-configured admission rule retained the evidence required by this scenario.
 
 \section{Discussion of Results}
 \label{sec:evaluation-discussion}
@@ -594,33 +591,26 @@ mediation and successful syscall evidence can be preserved together across the
 implemented pipeline. The result is stronger than observing a single hook, but
 it remains tied to one known sequence and one same-process correlation path.
 
-The profile comparison shows why admission placement matters. Without exact UID
-filtering, events from unrelated node activity reached transport and user-space
-processing even though later policy and detector logic did not need them. The
-filtered profile rejected that activity in the shared eBPF initialisation path
-and was associated with lower measured monitor-container cgroup CPU while
-retaining the required alert. This result is consistent with the architectural
-decision to combine configurable user-space analysis with a narrow optional
-kernel-side control.
+The profile comparison quantifies the benefit of applying an exact admission
+criterion before event transport. With UID filtering disabled, the complete
+selected event stream reached user space, where policies and detectors
+continued to perform their intended semantic selection. Enabling the filter
+discarded events from other effective UIDs earlier and reduced the measured
+CPU consumption of the monitor while preserving the alert required by the
+experiment.
 
-The experiment does not establish that UID filtering is universally suitable.
-A UID is not a stable Kubernetes workload identity, and two workloads may use
-the same numeric identity. Broader monitoring policies may also need evidence
-from several UIDs. The conclusion is therefore conditional: when the monitored
-subject has a known effective UID and the selected detector requires only that
-subject's events, exact early admission can materially reduce the monitor's
-user-space demand.
+This optimisation depends on prior knowledge of a suitable UID and therefore
+has a narrower operational scope than user-space policies. A security analyst
+may not know the relevant process identity in advance, and several processes
+or containerised workloads may share the same numeric UID.
 
 \section{Threats to Validity and Current Limitations}
 \label{sec:evaluation-threats-validity}
 
 \noindent\textbf{Internal validity.}
 The experiment ran sequentially on one busy two-core node, and unmeasured
-background activity could influence CPU samples. Rotating profile order reduces
-but does not remove this risk. Resource limits were absent, so monitor, target
-and cluster services could contend. The B1 connection anomaly and the E1/E2
-client defects were retained and interpreted through independent oracles rather
-than silently discarded.
+background activity could influence CPU samples. Resource limits were absent, so monitor, target
+and cluster services could contend.
 
 \medskip
 \noindent\textbf{Construct validity.}
@@ -628,10 +618,8 @@ Monitor-container cgroup CPU measures work charged to that cgroup; it does not
 include all kernel execution induced by eBPF programs and is therefore not
 total overhead. Cgroup memory and cgroup \texttt{total\_rss} capture different
 memory views.
-No matching perf-loss message is evidence only about diagnosed loss, not proof
-of complete transport. Detector completion measures conformance with one
-predefined sequence, while three benign controls cannot establish a general
-false-positive rate or detection accuracy.
+Detector completion measures conformance with one predefined sequence, while 
+three benign controls cannot establish a general false-positive rate or detection accuracy.
 
 \medskip
 \noindent\textbf{External validity.}
@@ -649,25 +637,22 @@ support strong inferential statistics. High node utilisation and sequential
 execution make duration and target-CPU differences unsuitable for causal
 conclusions. The approximately 92.0\% value is consequently reported
 only for the filtered-versus-unfiltered monitor-container cgroup CPU means.
-The monitor was privileged
-and observational; least-privilege deployment, enforcement and production
-readiness remain outside the evaluated claims.
 
-\section{Evaluation Summary}
-\label{sec:evaluation-summary}
-
-The experiment met its three scoped objectives. A privileged monitor Pod
-observed target activity generated through a Service from a separate trigger
-Pod on the same node. The selected benign interaction completed three times
-without an alert, while all three exploit runs recovered the synthetic flag
-and produced one complete four-event alert. Finally, the exact UID-filtered
-profile consumed a mean of 0.46\% of one CPU core in the monitor-container
-cgroup, below the 5\% project gate and approximately 92.0\% lower than the
-unfiltered profile in this campaign.
-
-These findings support the prototype's node-local collection, deterministic
-collective detection and early-admission design under the evaluated conditions.
-They do not establish cross-node visibility, total overhead, general detection
-accuracy, loss-free transport or production privilege requirements.
-Chapter~7 draws the overall conclusions from these bounded results and places
-the remaining limitations within the future development of the system.
+%\section{Evaluation Summary}
+%\label{sec:evaluation-summary}
+%
+%The experiment met its three scoped objectives. A privileged monitor Pod
+%observed target activity generated through a Service from a separate trigger
+%Pod on the same node. The selected benign interaction completed three times
+%without an alert, while all three exploit runs recovered the synthetic flag
+%and produced one complete four-event alert. Finally, the exact UID-filtered
+%profile consumed a mean of 0.46\% of one CPU core in the monitor-container
+%cgroup, below the 5\% project gate and approximately 92.0\% lower than the
+%unfiltered profile in this campaign.
+%
+%These findings support the prototype's node-local collection, deterministic
+%collective detection and early-admission design under the evaluated conditions.
+%They do not establish cross-node visibility, total overhead, general detection
+%accuracy, loss-free transport or production privilege requirements.
+%Chapter~7 draws the overall conclusions from these bounded results and places
+%the remaining limitations within the future development of the system.
