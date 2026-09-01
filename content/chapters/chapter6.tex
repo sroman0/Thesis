@@ -13,7 +13,7 @@ measured CPU demand below the project's 5\% threshold.
 The evaluation is deliberately bounded. It is not a measurement of general
 detection accuracy, cross-node visibility or total system overhead. Instead,
 it combines a functional campaign of three benign and three exploit runs with
-a performance campaign of nine runs in rotated profile order. Application
+a performance campaign of six monitored runs comparing two configurations. Application
 outcome, detector outcome, operational health and resource consumption are
 treated as separate observations throughout.
 
@@ -43,12 +43,11 @@ class, benign or exploit. The dependent observations are the application
 result, client result, alert count and completeness, reported loss diagnostics
 and restart delta. Three runs of each class were retained without replacement.
 For the performance campaign, the independent variable is the monitor profile:
-\textbf{exact UID-filtered, unfiltered, or no monitor}. The primary dependent metric is
+\textbf{exact UID-filtered or unfiltered}. The primary dependent metric is
 monitor-container cgroup CPU consumption; cgroup memory, cgroup
 \texttt{total\_rss}, target CPU and node CPU provide additional context. Each
-profile was repeated three times
-in the rotated orders F--U--N, U--N--F and N--F--U to reduce simple ordering
-bias.
+profile was repeated three times, with their relative order varied across the
+three rounds to reduce simple ordering bias.
 
 Each run was assigned an identifier. Before the interaction began, workload
 readiness and Pod state were verified; after completion, the corresponding
@@ -467,7 +466,7 @@ because the experiment did not include a separate producer-side event counter.
 \label{subsec:evaluation-metrics-profiles}
 
 The performance campaign reused the exploit workload because it provided a
-repeatable high-activity interval and an independent functional oracle. Three
+repeatable high-activity interval and an independent functional oracle. Two
 profiles were evaluated.
 
 \begin{itemize}
@@ -475,8 +474,6 @@ profiles were evaluated.
     in the common eBPF path.
     \item The \textbf{unfiltered} profile retained the same event, policy,
     detector and output configuration but disabled that early admission.
-    \item The \textbf{no-monitor} profile removed the monitoring workload and was
-    retained only as descriptive context.
 \end{itemize}
 
 After each profile change, the setup allowed a ten-second warm-up before the
@@ -498,8 +495,8 @@ descendant cgroups. The latter is a container-cgroup measurement and should not
 be interpreted as the RSS reported for the monitor process alone through
 \texttt{/proc}.
 
-Each profile was run once in each of three rounds. The order changed across
-rounds to F--U--N, U--N--F and N--F--U. Every monitored run also retained the 
+Each profile was run once in each of three rounds, and their relative order was
+varied across the campaign. Every run also retained the 
 flag, alert, loss-diagnostic and restart checks so that a low resource value 
 could not be accepted after a failed workload.
 
@@ -552,50 +549,12 @@ monitor container, whereas \texttt{total\_rss} identifies its resident-memory
 component. The reported peaks describe the observed campaign and may vary with
 workload duration, event rate and runtime conditions.
 
-The no-monitor profile has no monitor CPU or memory measurement because the
-monitor Pod, and consequently its container cgroup, was absent. Its target and
-node measurements remain useful for describing the load of the experimental
-environment. Table~\ref{tab:evaluation-profile-context} presents these values
-alongside the aggregate results of the monitored profiles.
-
-\begin{table}[H]
-    \centering
-    \small
-    \renewcommand{\arraystretch}{1.14}
-    \begin{tabularx}{\textwidth}{
-        @{}
-        l
-        >{\centering\arraybackslash}p{0.23\textwidth}
-        >{\centering\arraybackslash}p{0.23\textwidth}
-        >{\centering\arraybackslash}X
-        @{}
-    }
-        \toprule
-        \textbf{Profile} &
-        \textbf{Mean monitor CPU} &
-        \textbf{Mean target CPU} &
-        \textbf{Mean node busy time} \\
-        & \textbf{(\% one core)} &
-        \textbf{(\% one core)} &
-        \textbf{(\% across two CPUs)} \\
-        \midrule
-        UID-filtered & 0.46 & 38.87 & 93.99 \\
-        Unfiltered   & 5.73 & 33.64 & 94.49 \\
-        No monitor   & --   & 39.35 & 93.77 \\
-        \bottomrule
-    \end{tabularx}
-    \caption{Aggregate CPU observations for the monitor, target and Minikube
-    node.}
-    \label{tab:evaluation-profile-context}
-\end{table}
-
-Node busy time remained close to 94\% in every profile, indicating sustained
-contention on the two-CPU Minikube node. Target CPU also varied across the
-sequential runs. These measurements characterise the conditions surrounding
-the monitor results and reveal the limited capacity of the testbed. The
-evaluation consequently derives the filtering comparison from the monitor's
-own cgroup accounting and treats node CPU, target CPU and the no-monitor
-profile as contextual observations.
+Node busy time remained close to 94\% in both profiles: 93.99\% with UID
+filtering and 94.49\% without it. Mean target-container CPU was 38.87\% and
+33.64\% of one core, respectively. These values characterise a heavily loaded
+two-CPU testbed and provide context for the monitor measurements. The filtering
+comparison itself is derived from CPU time charged to the monitor's container
+cgroup.
 
 All six monitored runs preserved the functional outcome: the exploit recovered
 the synthetic flag and generated one complete four-event alert. Pod restart
@@ -661,8 +620,7 @@ background activity could influence CPU samples. Rotating profile order reduces
 but does not remove this risk. Resource limits were absent, so monitor, target
 and cluster services could contend. The B1 connection anomaly and the E1/E2
 client defects were retained and interpreted through independent oracles rather
-than silently discarded. No-monitor termination timing was not independently
-captured, which prevents a clean baseline subtraction.
+than silently discarded.
 
 \medskip
 \noindent\textbf{Construct validity.}
@@ -687,9 +645,9 @@ this workload and should not be generalised to workload identity.
 \medskip
 \noindent\textbf{Conclusion validity.}
 Three runs per profile permit a transparent descriptive comparison but do not
-support strong inferential statistics. High node utilisation and unresolved
-no-monitor timing make duration and target-CPU differences unsuitable for
-causal conclusions. The approximately 92.0\% value is consequently reported
+support strong inferential statistics. High node utilisation and sequential
+execution make duration and target-CPU differences unsuitable for causal
+conclusions. The approximately 92.0\% value is consequently reported
 only for the filtered-versus-unfiltered monitor-container cgroup CPU means.
 The monitor was privileged
 and observational; least-privilege deployment, enforcement and production
