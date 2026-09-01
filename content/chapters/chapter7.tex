@@ -1,47 +1,43 @@
 \chapter{Conclusions and Future Work}
 \label{ch:conclusions-future-work}
 
-The work presented in this thesis achieved its scoped objective: it produced
-and evaluated a node-local runtime security monitoring prototype for the
-selected Rocky Linux environment. The result is not a general security
-platform, but an end-to-end implementation that connects bounded kernel
-observations to typed evidence and deterministic local detection. The
-conclusions that follow are therefore grounded in the implemented event domain
-and in the controlled evaluation reported in
+This thesis achieved its stated objective by producing and evaluating a
+node-local runtime security monitoring prototype for the selected Rocky Linux
+environment. The implemented pipeline connects bounded kernel observations to
+typed evidence and deterministic local detection. Its scope is defined by the
+implemented event domain and by the controlled evaluation presented in
 Chapter~\ref{ch:experimental-evaluation}.
 
 \section{Summary of the Work}
 \label{sec:conclusions-summary-work}
 
-The central problem was to collect heterogeneous process and security-related
-kernel observations without making the collection layer responsible for their
-complete interpretation. The resulting architecture assigns constrained data
-extraction and optional early admission to \gls{ebpf}, while the Go runtime
-owns record normalisation, monitoring scope, detection and presentation. A
-shared event contract connects these responsibilities so that observations
-from different physical hooks can enter one logical event model.
+The central problem was the collection of heterogeneous process and
+security-related kernel observations while keeping their interpretation outside
+the collection layer. The resulting architecture assigns constrained data
+extraction and optional early admission to \gls{ebpf}. The Go runtime handles
+record normalisation, monitoring scope, detection and presentation. A shared
+event contract allows observations produced by different physical hooks to
+enter the same logical event model.
 
-In kernel space, the prototype combines complementary observation points to
-retain different stages of an operation, including requests, security
-mediation, committed transitions and returned outcomes. Direct and paired
-producers use a common bounded construction framework, selective probe
-planning instead activates only the producers and support programs required by the
-chosen logical events. Exact \gls{uid} admission can reject observations before
-full enrichment and transport when the monitored subject has a suitable fixed
-identity. Compatibility work based on CO-RE, explicit layout branches and
-verifier-visible bounds allows these mechanisms to operate on the verified
-Rocky Linux kernel.
+In kernel space, complementary observation points retain different stages of
+an operation, including requests, security mediation, committed transitions
+and returned outcomes. Direct and paired producers use a common bounded
+construction framework. Selective probe planning activates the producers and
+support programs required by the chosen logical events. Exact \gls{uid}
+admission can reject observations before full enrichment and transport when a
+suitable fixed identity is available. CO-RE, explicit layout branches and
+verifier-visible bounds adapt these mechanisms to the verified Rocky Linux
+kernel; the compatibility claim remains tied to that target.
 
-In user space, schema-directed decoding converts perf-buffer records into the
-typed event representation shared by later components. Policies define the
-relevant event domain and suppression decisions, detectors instead evaluate
-the admitted evidence. Point detectors act on one event, and collective
-detectors retain bounded local state for short ordered sequences. Alerts
-preserve the observations responsible for a match and may propagate
-\gls{attack} tactics and techniques as classification metadata. Together,
-these components form an engineering integration contribution: established
-kernel instrumentation and rule-based detection mechanisms were combined into
-a compact pipeline adapted to a constrained enterprise-kernel target.
+In user space, schema-directed decoding converts perf-buffer records into a
+typed representation shared by the subsequent components. Policies determine
+the relevant event domain and suppression decisions. Detectors evaluate the
+admitted evidence, either as individual events or as short ordered sequences
+held in bounded local state. Alerts preserve the observations responsible for
+a match and may carry \gls{attack} tactics and techniques as classification
+metadata. The contribution lies in the integration of these established
+mechanisms into a compact monitoring pipeline adapted to a constrained
+enterprise-kernel environment.
 
 \section{Main Results}
 \label{sec:conclusions-main-results}
@@ -51,113 +47,106 @@ boundary. In the single-node Minikube testbed, the monitor, vulnerable target
 and trigger ran in three separate Pods. All three exploit repetitions recovered
 the synthetic flag and produced one complete alert containing the configured
 four-event sequence. The three repetitions of the selected benign interaction
-produced the expected application response without completing that alert. The
-result demonstrates repeatable same-node, cross-Pod visibility and detection
-for this controlled scenario. In particular, the experiment exercised the
-same-process path of the selected collective detector rather than its complete
-set of possible process relationships.
+returned the expected application response without completing that sequence.
+These runs demonstrate repeatable same-node, cross-Pod visibility and detection
+for the controlled scenario. The correlation evidence covers the same-process
+path exercised by the selected detector; its other process relationships were
+outside the experiment.
 
-The performance comparison also supports the value of narrow early admission
-under the measured conditions. Across three runs, the exact UID-filtered
-profile consumed a mean of 0.46\% of one \gls{cpu} core in the monitor-container
-cgroup, and every filtered run remained below the project's 5\% gate. The
-corresponding unfiltered mean was 5.73\%; using the retained data, the filtered
-mean was approximately 92.0\% lower while flag recovery and the complete alert
-were preserved in every monitored run. This measurement concerns CPU charged
-to the monitor cgroup as a percentage of one core. It excludes kernel work
-charged elsewhere and must not be interpreted as total eBPF, node or system
-overhead. It nevertheless provides scenario-specific evidence that discarding
-irrelevant observations before transport can substantially reduce the demand
-placed on the user-space monitoring path.
+The performance campaign measured the effect of exact UID admission under the
+same workload. Across three runs, the filtered profile consumed a mean of
+0.46\% of one \gls{cpu} core in the monitor-container cgroup, and every run
+remained below the project's 5\% gate. The unfiltered profile recorded a mean
+of 5.73\%. Using the retained measurements, filtering reduced the mean by
+approximately 92.0\% while preserving flag recovery and the complete alert in
+every monitored run. The metric represents CPU time charged to the monitor
+cgroup as a percentage of one core and excludes kernel work charged elsewhere.
+The result therefore quantifies the user-space benefit of early admission for
+this scenario, without estimating total eBPF, node or system overhead.
 
 \section{Limitations}
 \label{sec:conclusions-limitations}
 
-The prototype's technical assurance remains narrower than its implemented
-event surface. Kernel and Go representations of the event contract are
-maintained separately, so consistency depends on review and cross-registry
-tests rather than generation from one source. The current registry gate also
-exposes an unresolved classification inconsistency: an internal socket support
-probe is treated as a public producer despite having no decoder schema.
-Object-backed tests do not yet exercise every loading, attachment,
-partial-initialisation and cleanup path on the target kernel. External policy
-and detector documents are validated semantically, but unknown YAML fields are
-not rejected strictly. Collective state is bounded, whereas some maintenance
-and alert-deduplication behaviour still depends on subsequent traffic and does
-not have equally strong capacity guarantees.
+The implemented event surface is broader than the current level of technical
+assurance. Kernel and Go representations of the event contract are maintained
+separately, and their agreement relies on review and cross-registry tests. The
+registry gate also exposes an unresolved classification inconsistency: an
+internal socket support probe is treated as a public producer despite having no
+decoder schema. Object-backed tests do not yet cover every loading, attachment,
+partial-initialisation and cleanup path on the target kernel. Policy and
+detector documents receive semantic validation, although the YAML decoder still
+accepts unknown fields. Collective sequence state has explicit bounds; some
+maintenance and alert-deduplication behaviour continues to depend on subsequent
+traffic and has weaker capacity guarantees.
 
-The analytical and operational scope is intentionally local. Detection is
-deterministic and configuration driven; the system neither discovers unknown
-behaviour through a learned baseline nor reconstructs persistent process or
-cluster graphs. The prototype observes and reports activity but does not enforce 
-decisions.
+The analytical and operational scope remains local. Detection follows
+deterministic configuration rules, with no learned behavioural baseline or
+persistent process and cluster graphs. Correlation keys identify local
+processes, resources and cgroups. The prototype records and reports activity;
+enforcement is outside its implemented functions.
 
-The evaluation further limits the breadth of the conclusions. It covered one
-enterprise kernel, one two-core Minikube node, one vulnerable workload and one
-scenario-specific collective detector, with three repetitions per condition.
-Consequently, the campaign supports a transparent engineering demonstration, not production readiness, broad
-portability, loss-free delivery or statistical claims about detection quality.
+The evaluation covered one enterprise kernel, one two-core Minikube node, one
+vulnerable workload and one scenario-specific collective detector, with three
+repetitions per condition. The evidence supports the engineering claims made
+for this controlled environment. Broader portability, production readiness,
+loss-free delivery and statistical detection quality require experiments with
+more kernels, workloads, detector sets and event rates.
 
 \section{Future Work}
 \label{sec:conclusions-future-work}
 
-The future development of the prototype should concentrate on extending its
-  operational capacity while preserving the separation between bounded kernel
-  collection and configurable user-space analysis. The principal priorities are
-  scalability, performance, broader early filtering, additional host-level
-  observation points and richer evidence from the hooks already implemented.
+Future development should increase the operational capacity of the prototype
+while preserving bounded kernel collection and configurable user-space
+analysis. Five areas have immediate value: scalability, performance, broader
+low-level filtering, additional host-level hooks and richer fields for the
+existing event catalogue.
 
-  Scalability should be considered at both agent and deployment level. A single
-  instance must remain responsive as the number of enabled events, policies,
-  detectors and monitored processes increases. This requires stress tests with
-  progressively higher event rates, longer execution periods and larger detector
-  catalogues. In a multi-node environment, each agent should continue to process
-  local observations independently, while a versioned export interface could
-  deliver events and alerts to an external platform for storage and
-  cluster-level analysis. Such an architecture would preserve bounded local
-  state and avoid introducing distributed correlation into the kernel-facing
-  agent.
+Scalability concerns both the capacity of one agent and its use across several
+nodes. A local instance must remain responsive as event rates, monitored
+processes, policies and active detectors increase. Longer stress campaigns and
+progressively larger detector catalogues can establish these limits. For a
+multi-node deployment, each agent can retain responsibility for local
+collection and correlation while exporting versioned events and alerts to an
+external storage or analysis platform. This arrangement keeps distributed
+state outside the kernel-facing runtime and gives cluster-level processing a
+clear interface.
 
-  Performance work should extend the measurements presented in
-  Chapter~\ref{ch:experimental-evaluation}. Future experiments should account
-  separately for kernel execution, event transport, decoding, policy evaluation,
-  detector processing and output rendering. Per-event and per-probe counters
-  would help identify the observation points responsible for the greatest cost.
-  Known-volume workloads could also quantify transport loss and establish the
-  event rates sustained by different perf-buffer capacities. Alternative
-  transport mechanisms, allocation reduction and detector-state optimisation
-  should be considered after profiling identifies the dominant bottlenecks.
+Performance analysis should separate the cost of kernel execution, event
+transport, decoding, policy evaluation, detector processing and output
+rendering. Per-probe and per-event counters would expose the observation points
+that generate the greatest load. Workloads with known event volumes could then
+measure sustained throughput, perf-buffer loss and the effect of buffer sizing.
+The resulting profiles would guide work on transport, memory allocation and
+detector state according to measured bottlenecks.
 
-  The current exact UID admission demonstrates that early filtering can reduce
-  the amount of data transported to user space, although its applicability
-  depends on prior knowledge of the monitored identity. A broader low-level
-  filtering model could support additional bounded selectors, including host
-  process identifiers, group identifiers, command names, cgroup identifiers,
-  ecc.. Where practical, the control plane could translate simple policy constraints into kernel map
-  entries and update them without rebuilding the eBPF object. Complex conditions
-  and detector logic would remain in user space, where they can evolve without
-  increasing verifier complexity or embedding high-level security semantics in
-  the collectors.
+Low-level filtering currently provides exact UID admission, which is effective
+when the relevant identity is known in advance. Additional bounded selectors
+could cover host process and group identifiers, command names, cgroup
+identifiers, namespace identifiers and selected event-specific values. The
+control plane could compile eligible policy constraints into kernel map entries
+and update them during execution. Expressive predicates and detector logic
+would continue to run in user space, preserving flexibility and keeping the
+collector acceptable to the verifier.
 
-  The host event domain can be expanded with new hooks selected from concrete
-  security use cases. Relevant areas include additional file modification outcomes, 
-  kernel key management, process isolation changes and other interfaces that can alter host behaviour. Each new
-  logical event should identify the precise kernel stage being observed and
-  distinguish requests, mediation points, committed transitions and returned
-  outcomes. Hook availability and payload extraction must also be verified
-  against the supported enterprise kernels before an event is included in the
-  public catalogue.
+The host event domain can grow through hooks selected from concrete detection
+and investigation requirements. Candidate areas include additional file
+modification outcomes, kernel key management, process-isolation changes and
+other interfaces capable of altering host behaviour. Every new logical event
+must state the kernel stage it observes and preserve the distinction between a
+request, a mediation point, a committed transition and a returned outcome.
+Support for the required hook and payload extraction must be established on the
+target enterprise kernels before public exposure.
 
-  Existing hooks can provide greater analytical value through carefully selected
-  additional fields. Useful extensions include return evidence for operations
-  currently observed only at entry, richer capability-check context, stable parent identity, and more
-  complete requested-versus-resolved resource details. These fields would allow
-  security analysts to distinguish similar operations more precisely and write
-  detectors with fewer ambiguous matches. Enrichment should remain bounded and
-  should be introduced only when the field contributes directly to a detection
-  or investigation requirement.
+The existing hooks can also provide more precise evidence. Useful additions
+include return information for operations currently observed only at entry,
+richer capability-check context, stable parent identity and more complete
+requested-versus-resolved resource details. Such fields can help a security
+analyst distinguish operations that currently produce similar records and can
+reduce ambiguity in detector conditions. Each enrichment should have a clear
+investigative purpose and a bounded collection cost.
 
-  Every extension affects the shared event contract and decoder schema. 
-  New filters, hooks and fields should therefore be
-  accompanied by registry checks, decoder fixtures, target-kernel attachment
-  tests and workload-based measurements.
+New filters, hooks and fields all affect the shared event contract and decoder
+schema. Their implementation should include registry checks, decoder fixtures,
+target-kernel attachment tests and workload-based measurements. This validation
+keeps extensions traceable from the kernel observation point to the evidence
+presented to the analyst.
