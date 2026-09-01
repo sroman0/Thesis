@@ -50,10 +50,13 @@ profile was repeated three times
 in the rotated orders F--U--N, U--N--F and N--F--U to reduce simple ordering
 bias.
 
-Every run was assigned an identifier and accompanied by trigger output,
-run-local monitor and target logs, Pod state and sampling data where relevant. The resulting dataset supports
-repeatability within this laboratory, but three repetitions per condition are
-not sufficient for population-level accuracy or overhead claims.
+Each run was assigned an identifier. Before the interaction began, workload
+readiness and Pod state were verified; after completion, the corresponding
+trigger output, monitor and target logs, restart counts and, where applicable,
+resource samples were retained under the same identifier. Effective manifests 
+and the complete command history were preserved with the experimental artefacts. 
+This organisation supports repeatability within the laboratory, although three 
+repetitions per condition are not sufficient for population-level accuracy or overhead claims.
 
 \section{Kubernetes and Minikube as the Evaluation Platform}
 \label{sec:evaluation-kubernetes-minikube}
@@ -250,26 +253,6 @@ evidence \cite{strom2020attack}.
 \section{Functional Evaluation}
 \label{sec:evaluation-functional}
 
-\subsection{Cross-Pod Event Visibility}
-\label{subsec:evaluation-cross-pod-visibility}
-
-Effective Kubernetes objects and runtime metadata confirmed that monitor,
-target and trigger had distinct Pod identities, IP addresses and cgroups.
-Run-local monitor logs nevertheless contained events from the target's UID and
-UTS name. Their host process identifiers belonged to target activity rather
-than to the monitor Pod, while Service and endpoint records confirmed that the
-client request originated from the separate trigger Pod. This evidence
-establishes the visibility property relevant to the design: a node-level eBPF
-collector can observe another Pod without joining its Pod or process namespace,
-provided both execute on the observed node.
-
-The observation does not establish a Kubernetes workload identity mechanism.
-UID 10001 was deliberately assigned to the target and used as an experimental
-admission key. The monitor did not query the Kubernetes API to map events to
-Pods, and no event crossed a node boundary. Pod metadata, cgroup evidence and
-monitor logs were compared after collection to validate the experimental
-topology.
-
 \subsection{Collective Detector Validation}
 \label{subsec:evaluation-collective-detector}
 
@@ -277,105 +260,205 @@ All three exploit runs recovered the synthetic flag and generated exactly one
 alert. Each alert retained four records in the required order: a
 \texttt{sched\_process\_}\allowbreak\texttt{exec} event for \path{/bin/sh}, another for
 \path{/bin/cat}, a \texttt{security\_file\_open} record resolving the mounted
-flag, and an \texttt{open} record whose return value was the non-negative file
-descriptor 2. This final record separates successful open evidence from the
-preceding mediation-stage observation.
+flag, and an \texttt{open} record. The final \texttt{open} event completed the 
+evidence by recording the syscall return value. In the retained alert, the value was 
+2: a non-negative result indicating success and identifying the file descriptor assigned by the kernel.
 
 Within each alert, all four records carried UID 10001 and the same stable host
 process identity. The experiment therefore exercised the same-process branch
-of \texttt{process\_tree} correlation. It did not independently test the
-immediate parent-child alternative and provides no evidence for arbitrary
-ancestry reconstruction. The observed completion validates the configured
-sequence for this exploit path, rather than all collective detectors or every
-possible implementation of the attack.
+of \texttt{process\_tree} correlation.
 
-The following abridged extract makes the retained evidence from exploit run E1
-explicit. It is transcribed from the JSON alert emitted by the monitor
-DaemonSet; timestamps and unrelated context fields are omitted for readability.
+The following listing is a field projection of the original JSON alert emitted
+during exploit run E1. The values are taken directly from the retained monitor
+log; timestamps and context fields not required to interpret the detector
+sequence are excluded from the projection.
 
-\begin{center}
-\begin{minipage}{0.94\textwidth}
-\footnotesize
-\setlength{\parindent}{0pt}
-\texttt{detector=aes-beta-command-execution}\\
-\texttt{severity=high, events=4}\\[0.25em]
-\texttt{[1] sched\_process\_exec: host\_pid=3848448, uid=10001}\\
-\hspace*{1.6em}\texttt{file=/bin/sh}\\
-\texttt{[2] sched\_process\_exec: host\_pid=3848448, uid=10001}\\
-\hspace*{1.6em}\texttt{file=/bin/cat}\\
-\texttt{[3] security\_file\_open: host\_pid=3848448, uid=10001}\\
-\hspace*{1.6em}\texttt{resolved=/opt/aes-beta/flag, requested=flag}\\
-\texttt{[4] open: host\_pid=3848448, uid=10001}\\
-\hspace*{1.6em}\texttt{pathname=flag, return=fd:2}\\[0.25em]
-\texttt{ATT\&CK: TA0002, TA0009; T1059.004, T1005}
-\end{minipage}
-\end{center}
+\begin{lstlisting}[
+      basicstyle=\ttfamily\scriptsize,
+      caption={Selected fields from the JSON alert emitted during exploit run E1.},
+      label={lst:evaluation-alert-e1}
+  ]
+  {
+    "type": "alert",
+    "detector_id": "aes-beta-command-execution",
+    "severity": "high",
+    "event_count": 4,
+    "events": [
+      {
+        "event_name": "sched_process_exec",
+        "process": {"uid": 10001, "comm": "sh"},
+        "host": {"pid": 3848448},
+        "args": [
+          {"name": "fileName", "value": "/bin/sh"}
+        ]
+      },
+      {
+        "event_name": "sched_process_exec",
+        "process": {"uid": 10001, "comm": "cat"},
+        "host": {"pid": 3848448},
+        "args": [
+          {"name": "fileName", "value": "/bin/cat"}
+        ]
+      },
+      {
+        "event_name": "security_file_open",
+        "process": {"uid": 10001, "comm": "cat"},
+        "host": {"pid": 3848448},
+        "args": [
+          {
+            "name": "pathname",
+            "value": "/opt/aes-beta/flag"
+          },
+          {
+            "name": "syscall_pathname",
+            "value": "flag"
+          }
+        ]
+      },
+      {
+        "event_name": "open",
+        "process": {"uid": 10001, "comm": "cat"},
+        "host": {"pid": 3848448},
+        "args": [
+          {"name": "pathname", "value": "flag"},
+          {
+            "name": "returnValue",
+            "value": 2,
+            "label": "fd:2"
+          }
+        ]
+      }
+    ],
+    "threat": {
+      "framework": "MITRE ATT&CK Enterprise",
+      "version": "v19.1",
+      "tactics": [
+        {"id": "TA0002", "name": "Execution"},
+        {"id": "TA0009", "name": "Collection"}
+      ],
+      "techniques": [
+        {
+          "id": "T1059.004",
+          "name": "Unix Shell",
+          "sub_technique": "Unix Shell"
+        },
+        {
+          "id": "T1005",
+          "name": "Data from Local System"
+        }
+      ],
+      "data_sources": ["File", "Process"],
+      "data_components": [
+        "File Access",
+        "Process Creation"
+      ]
+    }
+  }
+  \end{lstlisting}
 
-The first two records confirm the shell and \texttt{cat} executable
-transitions. The third preserves the resolved-object evidence observed at the
-LSM mediation point, while the fourth records the successful syscall result.
-The repeated host PID and UID make the same target process visible in the
-extract; the detector used its stable local process identity to complete this
-particular sequence. The high-severity alert and ATT\&CK fields are detector
-output metadata rather than independent evidence that the attack succeeded.
+The first two records confirm the successful executable transitions to
+\path{/bin/sh} and \path{/bin/cat}. The third identifies the resolved flag file
+at the LSM mediation point, while the fourth records the successful result of
+the corresponding \texttt{open} syscall. The repeated host PID and UID in the
+listing are consistent with all four observations originating from the same
+target process. Internally, the detector's \texttt{process\_tree} strategy also
+uses the task start time to avoid correlating different process lifetimes that
+reuse the same numeric PID.
 
 The application and detector oracles agreed in all three exploit runs, but they
-remain logically independent. Recovering the flag demonstrates that the attack
-reached its intended application effect. The alert demonstrates that the four
-configured kernel observations were received and correlated. Neither alone
-proves the other, which is illustrated by the client validation discrepancy
-described below.
+measure different outcomes. Recovering the synthetic flag demonstrates that the
+attack reached its intended application effect. The alert instead demonstrates
+that the four configured kernel observations were received and correlated in
+the expected order. Successful exploitation does not by itself guarantee alert
+generation, and an alert does not replace verification of the application
+outcome. This distinction is particularly relevant to the client-side
+validation discrepancy discussed below.
 
 \subsection{Benign Control and Repeated Runs}
 \label{subsec:evaluation-benign-repeated-runs}
 
-Table~\ref{tab:evaluation-functional-runs} reports all six retained functional
-runs. The benign interaction returned the expected ciphertext three times and
-produced no matching alert. This is evidence that the selected normal use did
-not complete the four-stage sequence; it is not a false-positive-rate estimate.
-The exploit recovered the flag and completed the detector in all three runs.
+The benign interaction was used as a negative control for the configured
+detector. It exercised the target's normal encryption workflow and returned the
+expected ciphertext without invoking the command-execution path associated with
+flag recovery. Repeating this interaction provided a direct comparison with
+the exploit runs under the same deployment and monitoring configuration.
+
+Table~\ref{tab:evaluation-functional-runs} reports the application and detector
+outcomes of the six retained runs. The detailed contents of the exploit alert
+were examined in the preceding subsection; the table records only whether the
+configured sequence completed.
 
 \begin{table}[H]
     \centering
     \footnotesize
-    \setlength{\tabcolsep}{4pt}
+    \setlength{\tabcolsep}{5pt}
     \renewcommand{\arraystretch}{1.14}
-    \begin{tabularx}{\textwidth}{@{}p{0.09\textwidth}p{0.12\textwidth}r p{0.22\textwidth}r X@{}}
+    \begin{tabularx}{\textwidth}{
+        @{}
+        p{0.09\textwidth}
+        p{0.14\textwidth}
+        X
+        p{0.12\textwidth}
+        p{0.27\textwidth}
+        @{}
+    }
         \toprule
-        \textbf{Run} & \textbf{Class} & \textbf{Duration} &
-        \textbf{Application/client result} & \textbf{Alerts} &
-        \textbf{Detector evidence} \\
+        \textbf{Run} &
+        \textbf{Interaction} &
+        \textbf{Application outcome} &
+        \textbf{Alerts} &
+        \textbf{Sequence outcome} \\
         \midrule
-        B1 & Benign & 138,181 ms & Expected response; client pass & 0 & Absent \\
-        B2 & Benign & 13 ms & Expected response; client pass & 0 & Absent \\
-        B3 & Benign & 14 ms & Expected response; client pass & 0 & Absent \\
-        E1 & Exploit & 46,766 ms & Flag recovered; client fail & 1 & Complete,
-        ordered four-event sequence \\
-        E2 & Exploit & 45,877 ms & Flag recovered; client fail & 1 & Complete,
-        ordered four-event sequence \\
-        E3 & Exploit & 47,577 ms & Flag recovered; client pass & 1 & Complete,
-        ordered four-event sequence \\
+
+        B1 & Benign &
+        Expected ciphertext returned &
+        0 &
+        No matching sequence completed \\
+
+        B2 & Benign &
+        Expected ciphertext returned &
+        0 &
+        No matching sequence completed \\
+
+        B3 & Benign &
+        Expected ciphertext returned &
+        0 &
+        No matching sequence completed \\
+
+        E1 & Exploit &
+        Synthetic flag recovered &
+        1 &
+        Four-event sequence completed \\
+
+        E2 & Exploit &
+        Synthetic flag recovered &
+        1 &
+        Four-event sequence completed \\
+
+        E3 & Exploit &
+        Synthetic flag recovered &
+        1 &
+        Four-event sequence completed \\
+
         \bottomrule
     \end{tabularx}
-    \caption{Functional results from the three benign and three exploit runs.}
+    \caption{Application and detector outcomes of the repeated functional runs.}
     \label{tab:evaluation-functional-runs}
 \end{table}
 
-The B1 duration is retained as an experimental anomaly. A stale, non-protocol
-validation connection occupied the target's single accepted session, causing
-the client to wait until timeout; the actual target interaction then completed
-in 6~ms. B1 is therefore not used for a latency conclusion. E1 and E2 expose a
-different harness defect. The client expected an obsolete flag prefix, and the
-first correction was malformed by shell parameter expansion. Both runs still
-recorded the synthetic flag and complete detector alert, whereas the corrected
-literal check passed in E3. Consequently, application exploitation succeeded
-in 3/3 runs, client validation passed in 1/3, and detector completion occurred
-in 3/3.
+The three benign runs completed without producing an
+\texttt{aes-beta-command-execution} alert. Under the same testbed conditions,
+each exploit run recovered the synthetic flag and completed the configured
+detector sequence. These observations show consistent behaviour for the two
+interactions exercised by the campaign. The benign sample covers one selected
+application workflow, so it does not provide a basis for estimating a general
+false-positive rate.
 
-Pod restart deltas were zero across all six intervals. No monitor log contained
-a matching perf-event loss diagnostic in those intervals. This means that the
-runtime reported no diagnosed loss during the retained runs; it does not prove
-loss-free transport because no independent event-completeness counter was used.
+Pod restart deltas remained zero throughout the six retained intervals, and the
+monitor emitted no matching perf-event loss diagnostic. These health checks
+indicate that no reported restart or transport-loss condition affected the
+observed outcomes. Event completeness could not be quantified independently
+because the experiment did not include a separate producer-side event counter.
 
 \section{Performance Evaluation}
 \label{sec:evaluation-performance}
@@ -385,42 +468,55 @@ loss-free transport because no independent event-completeness counter was used.
 
 The performance campaign reused the exploit workload because it provided a
 repeatable high-activity interval and an independent functional oracle. Three
-profiles were evaluated. The filtered profile enabled exact UID 10001 admission
-in the common eBPF path. The unfiltered profile retained the same event,
-policy, detector and output configuration but disabled that early admission.
-The no-monitor profile removed the monitoring workload and was retained only
-as descriptive context.
+profiles were evaluated.
+
+\begin{itemize}
+    \item The \textbf{filtered} profile enabled exact UID 10001 admission
+    in the common eBPF path.
+    \item The \textbf{unfiltered} profile retained the same event, policy,
+    detector and output configuration but disabled that early admission.
+    \item The \textbf{no-monitor} profile removed the monitoring workload and was
+    retained only as descriptive context.
+\end{itemize}
 
 After each profile change, the setup allowed a ten-second warm-up before the
 official run. A nominal 75-second sampler recorded one-second observations,
 but statistics were calculated only from samples whose host timestamps fell
-within the actual exploit start and end markers. The principal CPU metric was
-the change in the monitor container's cgroup-v1 CPU accounting divided by
-elapsed wall time, expressed as a percentage of one CPU core
-\cite{linux_cgroup_v1_cpuacct}. Total memory and the
-\texttt{total\_rss} counter were read from the same container cgroup. The
-latter is the cgroup-v1 resident-memory counter and must not be interpreted as
-the \texttt{/proc} RSS of the monitor process. These metrics share a cgroup
-boundary but describe different resources.
+within the actual exploit start and end markers.
+The primary CPU metric was derived from the monitor container's cgroup-v1
+\texttt{cpuacct.usage} counter. For each sampling interval, the increase in
+accumulated CPU time was divided by the elapsed wall-clock time and expressed as
+a percentage of one CPU core. A value of 100\% therefore represents the
+equivalent of one fully utilised core, while the project's 5\% threshold
+corresponds to an average demand of 0.05 core.
+
+Memory was observed through two counters belonging to the same container
+cgroup. The \texttt{memory.usage\_in\_bytes} value represents the overall memory
+accounted to the cgroup, whereas \texttt{total\_rss} from
+\texttt{memory.stat} represents its resident-memory component, including
+descendant cgroups. The latter is a container-cgroup measurement and should not
+be interpreted as the RSS reported for the monitor process alone through
+\texttt{/proc}.
 
 Each profile was run once in each of three rounds. The order changed across
-rounds to F--U--N, U--N--F and N--F--U. Per-profile means and sample
-\gls{sd}s were then computed across the three run means. The reported mean of
-run-level 95th percentiles is descriptive; it is not a confidence interval.
-Every monitored run also retained the flag, alert, loss-diagnostic and restart
-checks so that a low resource value could not be accepted after a failed
-workload.
+rounds to F--U--N, U--N--F and N--F--U. Every monitored run also retained the 
+flag, alert, loss-diagnostic and restart checks so that a low resource value 
+could not be accepted after a failed workload.
 
 \subsection{Monitor CPU and Memory Consumption}
 \label{subsec:evaluation-monitor-resources}
 
-Table~\ref{tab:evaluation-performance-profiles} gives the observed monitor
-metrics and exposes the values from each retained run. The filtered mean
-remained tightly grouped between 0.44\% and 0.47\% of one core, with a mean of
-0.46\% and an \gls{sd} of 0.02 percentage points.
-The unfiltered mean was 5.73\%, with an \gls{sd} of 0.61 and a range from
-5.28\% to 6.43\%. The mean run-level 95th percentile was 1.00\% for the
-filtered profile and 8.38\% for the unfiltered profile.
+The UID-filtered configuration consistently required less monitor CPU than the
+unfiltered configuration. Across the three filtered runs, mean consumption
+ranged from 0.44\% to 0.47\% of one CPU core. The aggregate mean was 0.46\%,
+with an \gls{sd} of 0.02 percentage points. In the unfiltered runs, the
+corresponding values ranged from 5.28\% to 6.43\%, producing an aggregate mean
+of 5.73\% and an \gls{sd} of 0.61 percentage points.
+
+Table~\ref{tab:evaluation-performance-profiles} reports the measurements from
+each monitored run. The 95th percentile describes short periods of increased
+CPU activity within a run. Its mean across the three repetitions was 1.00\%
+for the filtered profile and 8.38\% for the unfiltered profile.
 
 \begin{table}[H]
     \centering
@@ -445,27 +541,67 @@ filtered profile and 8.38\% for the unfiltered profile.
         Unfiltered & R3 & 52 & 5.28 & 7.53 & 96.20 & 40.98 \\
         \bottomrule
     \end{tabularx}
-    \caption{Per-run CPU and memory observations for the monitor-container
-    cgroup. Aggregate means and standard deviations are reported in the text.}
+    \caption{Per-run resource measurements for the monitor-container cgroup.}
     \label{tab:evaluation-performance-profiles}
 \end{table}
 
-Peak monitor-container cgroup memory was 92.17~MiB in the filtered runs and
-110.21~MiB in the unfiltered runs; peak cgroup \texttt{total\_rss} was 36.97
-and 41.24~MiB, respectively. These maxima describe the retained campaign and
-are not estimates of steady-state memory requirements. All six monitored runs
-recovered the flag, produced one complete alert, had zero restart deltas and
-contained no matching loss diagnostic.
+Peak cgroup memory reached 92.17~MiB with UID filtering and 110.21~MiB without
+filtering. The highest observed \texttt{total\_rss} values were 36.97~MiB and
+41.24~MiB, respectively. Cgroup memory includes all memory charged to the
+monitor container, whereas \texttt{total\_rss} identifies its resident-memory
+component. The reported peaks describe the observed campaign and may vary with
+workload duration, event rate and runtime conditions.
 
-Node CPU was high in every profile: the aggregate busy-time fractions across
-the two node CPUs were 93.99\% filtered, 94.49\% unfiltered and 93.77\%
-without the monitor. Mean target-container cgroup CPU, expressed as a
-percentage of one core, was 38.87\%, 33.64\% and 39.35\%, respectively. The
-no-monitor values help reveal the saturated testbed but are not used to
-subtract a baseline from monitor CPU.
-Moreover, final monitor-Pod disappearance in the no-monitor runs was not
-independently timestamped. Run durations and target CPU therefore remain
-contextual and do not support a causal total-overhead comparison.
+The no-monitor profile has no monitor CPU or memory measurement because the
+monitor Pod, and consequently its container cgroup, was absent. Its target and
+node measurements remain useful for describing the load of the experimental
+environment. Table~\ref{tab:evaluation-profile-context} presents these values
+alongside the aggregate results of the monitored profiles.
+
+\begin{table}[H]
+    \centering
+    \small
+    \renewcommand{\arraystretch}{1.14}
+    \begin{tabularx}{\textwidth}{
+        @{}
+        l
+        >{\centering\arraybackslash}p{0.23\textwidth}
+        >{\centering\arraybackslash}p{0.23\textwidth}
+        >{\centering\arraybackslash}X
+        @{}
+    }
+        \toprule
+        \textbf{Profile} &
+        \textbf{Mean monitor CPU} &
+        \textbf{Mean target CPU} &
+        \textbf{Mean node busy time} \\
+        & \textbf{(\% one core)} &
+        \textbf{(\% one core)} &
+        \textbf{(\% across two CPUs)} \\
+        \midrule
+        UID-filtered & 0.46 & 38.87 & 93.99 \\
+        Unfiltered   & 5.73 & 33.64 & 94.49 \\
+        No monitor   & --   & 39.35 & 93.77 \\
+        \bottomrule
+    \end{tabularx}
+    \caption{Aggregate CPU observations for the monitor, target and Minikube
+    node.}
+    \label{tab:evaluation-profile-context}
+\end{table}
+
+Node busy time remained close to 94\% in every profile, indicating sustained
+contention on the two-CPU Minikube node. Target CPU also varied across the
+sequential runs. These measurements characterise the conditions surrounding
+the monitor results and reveal the limited capacity of the testbed. The
+evaluation consequently derives the filtering comparison from the monitor's
+own cgroup accounting and treats node CPU, target CPU and the no-monitor
+profile as contextual observations.
+
+All six monitored runs preserved the functional outcome: the exploit recovered
+the synthetic flag and generated one complete four-event alert. Pod restart
+deltas remained zero, and the retained logs contained no matching perf-event
+loss diagnostic. The resource measurements can therefore be interpreted
+alongside a successful and consistent monitored workload.
 
 \subsection{Effect of Kernel-Side UID Filtering}
 \label{subsec:evaluation-uid-filter-effect}
