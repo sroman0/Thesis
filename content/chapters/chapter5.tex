@@ -61,18 +61,27 @@ the active event loop.
 \section{Loader, Probe Registry and Attachment Lifecycle}
 \label{sec:implementation-loader-registry}
 
-After validation, bootstrap resolves the eBPF object and BTF inputs. An object
-named by \texttt{PROJECT\_BPF\_OBJECT} takes precedence over the command-line
-path; otherwise the embedded object is used. BTF resolution follows the same
-environment, command-line and default-host order. Embedding simplifies
-distribution but does not remove the need for compatible BTF, kernel features
-and privileges.
+After validation, the bootstrap phase resolves the artefacts required to load
+  the eBPF programs. The eBPF object is an ELF file produced by compiling the C
+  collector sources.
 
-Policies and detectors are prepared before the eBPF module is opened. A finite
-policy scope can narrow the CLI event set; an open-ended rule retains the wider
-scope. A disjoint finite policy and CLI selection fails startup, avoiding an
-empty set being interpreted as ``all events''. Selecting a detector does not
-enable its kernel events independently: its inputs must already be in scope.
+  The runtime first checks the \texttt{PROJECT\_BPF\_OBJECT} environment
+  variable, followed by the path supplied through the command-line interface. If
+  neither is specified, it reads \path{dist/project.bpf.o}, which is embedded in
+  the Go executable at build time. In every case, the selected object is loaded
+  into memory and passed to \texttt{libbpfgo} as a byte buffer.
+
+  The BTF file is resolved separately. The
+  \texttt{PROJECT\_BTF\_FILE} environment variable takes precedence over the
+  command-line configuration, whose default is
+  \path{/sys/kernel/btf/vmlinux}. This file describes the types of the running
+  kernel and allows \texttt{libbpf} to apply the CO-RE relocations required by
+  the compiled eBPF object.
+
+Policies and detectors are prepared before the eBPF module is opened. A disjoint 
+finite policy and CLI selection fails startup, avoiding an empty set being interpreted
+as ``all events''. Selecting a detector does not enable its kernel events independently: 
+its inputs must already be in scope.
 
 The probe registry converts logical events into producer programs and any
 support probes needed to retain intermediate information.
@@ -124,10 +133,10 @@ variable stream of indexed arguments.
   \begin{figure}[H]
       \centering
       \includegraphics[
-          width=0.90\textwidth,
-          height=0.65\textheight,
+          width=0.95\textwidth,
+          height=0.75\textheight,
           keepaspectratio
-      ]{figures/chapter5/userspace-decoder-record-layout.drawio.png}
+      ]{figures/chapter5/eBPF_Decoding_Schema.drawio.png}
       \caption[Binary record layout consumed by the user-space decoder]
       {Binary record layout consumed by the user-space decoder.}
       \label{fig:userspace-decoder-record-layout}
@@ -228,10 +237,6 @@ p.processDetectors(ctx, event)
 \end{lstlisting}
 
 Failure at any gate prevents both event output and detector evaluation.
-
-The policy manager does not generate alerts. Monitor and detect modes share the
-same admission path; only suppression removes a matching event from later
-consumers.
 
 Valid rejections are distinguished from failures. Only the first few filter
 drops are logged at debug level, preventing unbounded diagnostics. Decode,
@@ -539,11 +544,6 @@ selected libbpf messages, perf-buffer losses, and decoder, detector or output
 failures. Zap never serialises monitored events or alerts, keeping
 infrastructure conditions outside the security data stream.
 
-Table~\ref{tab:output-boundaries} summarises channels and failure behaviour.
-Configuration and startup errors return to the command entry point; most
-record-local failures are logged and processing continues. Logger
-synchronisation errors are discarded, so diagnostic delivery is not durable.
-
 \begin{table}[H]
     \centering
     \small
@@ -571,14 +571,18 @@ synchronisation errors are discarded, so diagnostic delivery is not durable.
     \label{tab:output-boundaries}
 \end{table}
 
-\section{User-Space Implementation Summary}
-\label{sec:user-space-implementation-summary}
+Table~\ref{tab:output-boundaries} summarises channels and failure behaviour.
+Configuration and startup errors return to the command entry point; most
+record-local failures are logged and processing continues.
 
-The Go runtime turns perf-buffer records into typed events, applies admission
-gates and routes accepted evidence to output and deterministic detectors.
-Policies control scope and suppression; detectors evaluate point conditions or
-bounded local sequences and carry ATT\&CK metadata into alerts.
-
-Registry and decoder tests establish structural invariants. Attachment under
-workload, alert behaviour, transport loss and resource consumption require
-target-environment evidence and are examined in Chapter~6.
+%\section{User-Space Implementation Summary}
+%\label{sec:user-space-implementation-summary}
+%
+%The Go runtime turns perf-buffer records into typed events, applies admission
+%gates and routes accepted evidence to output and deterministic detectors.
+%Policies control scope and suppression; detectors evaluate point conditions or
+%bounded local sequences and carry ATT\&CK metadata into alerts.
+%
+%Registry and decoder tests establish structural invariants. Attachment under
+%workload, alert behaviour, transport loss and resource consumption require
+%target-environment evidence and are examined in Chapter~6.

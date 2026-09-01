@@ -1,7 +1,7 @@
 \chapter{Experimental Evaluation}
 \label{ch:experimental-evaluation}
 
-Chapter~5 completed the implementation account at the point where decoded
+Chapter \ref{ch:user-space-implementation} completed the implementation account at the point where decoded
 events are admitted, evaluated and rendered. This chapter evaluates that
 pipeline in a controlled containerised scenario. A vulnerable service, an
 exploit client and the monitor run in three separate Pods on one Minikube node.
@@ -20,14 +20,13 @@ treated as separate observations throughout.
 \section{Evaluation Objectives and Experimental Protocol}
 \label{sec:evaluation-objectives-protocol}
 
-The experimental protocol addresses three objectives. First, it tests
-node-local, cross-Pod visibility: the monitor must receive target events even
-though the monitor, target and trigger have different Pod identities, network
-addresses and cgroups. Second, it tests the scenario-specific collective
-detector. The exploit should produce one alert containing four ordered events,
-whereas the selected benign interaction should not complete that sequence.
-Third, it compares the monitor's resource use with exact UID admission enabled
-and disabled while retaining the same exploit workload and detector outcome.
+The experimental protocol addresses three objectives.
+
+\begin{itemize}
+    \item First, it tests node-local, cross-Pod visibility: the monitor must receive target events even though the monitor, target and trigger have different Pod identities, network addresses and cgroups.
+    \item Second, it tests the scenario-specific collective detector. The exploit should produce one alert containing four ordered events, whereas the selected benign interaction should not complete that sequence.
+    \item Third, it compares the monitor's resource use with exact UID admission enabled and disabled while retaining the same exploit workload and detector outcome.
+\end{itemize}
 
 These objectives require independent evidence oracles. Application success is
 established by the benign response or by recovery of the synthetic flag.
@@ -44,7 +43,7 @@ class, benign or exploit. The dependent observations are the application
 result, client result, alert count and completeness, reported loss diagnostics
 and restart delta. Three runs of each class were retained without replacement.
 For the performance campaign, the independent variable is the monitor profile:
-exact UID-filtered, unfiltered, or no monitor. The primary dependent metric is
+\textbf{exact UID-filtered, unfiltered, or no monitor}. The primary dependent metric is
 monitor-container cgroup CPU consumption; cgroup memory, cgroup
 \texttt{total\_rss}, target CPU and node CPU provide additional context. Each
 profile was repeated three times
@@ -52,18 +51,75 @@ in the rotated orders F--U--N, U--N--F and N--F--U to reduce simple ordering
 bias.
 
 Every run was assigned an identifier and accompanied by trigger output,
-run-local monitor and target logs, Pod state and sampling data where relevant.
-Effective manifests, image identities, cgroup locations and the command history
-were retained separately from the thesis body. The resulting dataset supports
+run-local monitor and target logs, Pod state and sampling data where relevant. The resulting dataset supports
 repeatability within this laboratory, but three repetitions per condition are
 not sufficient for population-level accuracy or overhead claims.
+
+\section{Kubernetes and Minikube as the Evaluation Platform}
+\label{sec:evaluation-kubernetes-minikube}
+
+The evaluation uses Kubernetes to deploy and coordinate the containerised
+components involved in the experiment. Kubernetes manages applications through
+declarative resources that describe their desired execution state. Its basic
+execution unit is the Pod, which groups one or more containers that share
+selected namespaces and resources. Containers placed in separate Pods instead
+retain distinct workload identities and, unless explicitly configured
+otherwise, separate process and network contexts
+\cite{kubernetes_pods,kubernetes_process_namespace}.
+
+This model is relevant to the evaluation because the monitoring prototype and
+the application under observation can run as independent workloads while still
+executing on the same node. The application does not need to include the
+monitoring executable or expose an application-specific telemetry interface.
+The monitor obtains visibility from the node kernel, whereas Kubernetes
+controls the placement, isolation and lifecycle of the corresponding
+containers.
+
+The monitor is deployed through a DaemonSet, a controller intended for node-local services
+such as monitoring and logging agents. In a multi-node environment, this model
+can maintain one monitor instance on each eligible node; in the present
+evaluation, it produces one instance because the cluster contains a single
+node \cite{kubernetes_daemonset}.
+
+Communication with the target is provided by a Kubernetes Service. Pods are
+ephemeral and may receive different addresses when recreated, whereas a
+Service provides a stable logical endpoint and selects the Pods that implement
+the application. The experimental client can therefore address the service
+without depending on the current IP address of the target Pod
+\cite{kubernetes_service}.
+
+The Kubernetes environment is instantiated locally through Minikube. Minikube
+provisions a Kubernetes cluster on one machine and supports several drivers for
+creating its node environment. The experiment uses the Docker driver, under
+which the Minikube node is hosted through Docker rather than through a
+dedicated virtual machine \cite{minikube_local_cluster,minikube_docker_driver}.
+The resulting arrangement preserves the Kubernetes resource and networking
+model while keeping the testbed reproducible on the selected Rocky Linux host.
+
+Minikube is used here as a controlled evaluation platform. It makes it possible to deploy the
+monitor, target and experiment client through Kubernetes manifests, inspect
+their runtime state with \texttt{kubectl}, and repeat the scenario without
+requiring external cluster infrastructure. The concrete software versions,
+node resources, workload identities and security settings used in the
+experiment are reported in
+Section~\ref{sec:evaluation-cross-pod-testbed}.
+
+\begin{figure}[H]
+      \centering
+      \includegraphics[
+          width=0.92\textwidth,
+          keepaspectratio
+      ]{figures/chapter6/minikube-local-kubernetes.drawio.png}
+      \caption[Minikube local Kubernetes environment]
+      {General representation of Minikube environment on a single host.}
+      \label{fig:minikube-local-kubernetes}
+  \end{figure}
 
 \section{Cross-Pod Minikube Experimental Testbed}
 \label{sec:evaluation-cross-pod-testbed}
 
-The testbed ran on an x86-64 Rocky Linux 8.10 host with kernel
-\path{4.18.0-553.137.1.el8_10.x86_64}. Minikube v1.38.1 used its Docker driver
-to create one node configured with two CPUs and 4096~MiB of memory
+The testbed ran on an x86-64 Rocky Linux 8.10 host. Minikube v1.38.1 used its 
+Docker driver to create one node configured with two CPUs and 4096~MiB of memory
 \cite{minikube_docker_driver}. The Kubernetes server was v1.30.0; the host
 client was v1.36.3. The node reported \path{docker://29.2.1} as its container
 runtime, while the host Docker CLI was v26.1.3. The CPU and memory values are
@@ -73,11 +129,10 @@ were not preserved as experimental evidence.
 Table~\ref{tab:evaluation-environment} combines the environment and workload
 roles. All three Pods were scheduled on the same node and therefore shared its
 kernel, but they did not share a Pod or process namespace. Kubernetes gives
-Pods separate network identities, while the ClusterIP Service selected the
+Pods separate network identities; the ClusterIP Service instead selected the
 target endpoint on TCP port 1337 \cite{kubernetes_pod_networking}. The observed
 Service address was \texttt{10.102.19.49} and its target endpoint was
-\texttt{10.244.0.3:1337}; these are recorded observations rather than portable
-configuration values.
+\texttt{10.244.0.3:1337}.
 
 \begin{table}[H]
     \centering
@@ -88,21 +143,15 @@ configuration values.
         \textbf{Component} & \textbf{Form and identity} &
         \textbf{Experimental boundary} \\
         \midrule
-        Host and node & Rocky Linux 8.10; one Docker-backed Minikube node;
-        kernel \path{4.18.0-553.137.1.el8_10.x86_64} & Two CPUs and 4096~MiB
-        requested; no multi-node observation. \\
-        Monitor & DaemonSet; UID/GID 0; privileged; seccomp
-        \texttt{Unconfined} & Read-only root filesystem and host BTF mounted
+        Host and node & Rocky Linux 8.10; one Docker-backed Minikube node; &
+        Two CPUs and 4096~MiB requested; no multi-node observation. \\
+        Monitor & DaemonSet; UID/GID 0; privileged; & host BTF mounted
         read-only; bpffs and tracefs mounted read-write. \\
         Target & Single-replica Deployment; UID/GID 10001; non-root & All
         capabilities dropped, privilege escalation disabled, read-only root
         filesystem; the synthetic flag Secret is mounted only here. \\
         Trigger & Standalone Pod; UID/GID 10002; non-root & Same capability and
-        filesystem restrictions as the target; executes benign and exploit
-        clients through the Service. \\
-        Pod isolation & Distinct Pod UIDs, IPs, container identities and
-        cgroups & \texttt{hostPID}, \texttt{hostNetwork} and
-        \texttt{shareProcessNamespace} disabled for all three Pods. \\
+        filesystem restrictions as the target. \\
         \bottomrule
     \end{tabularx}
     \caption{Recorded environment and component boundaries of the cross-Pod
@@ -122,19 +171,15 @@ the components able to contend for the single node.
 Figure~\ref{fig:evaluation-cross-pod-topology} shows the boundary evaluated by
 the experiment. The trigger reaches the target through Kubernetes networking;
 the monitor does not join that application path. It observes the common node
-kernel from its own Pod. Thus, successful observation supports node-local
-cross-Pod monitoring, not collection from a different node or cluster-wide
-correlation. Disabling \texttt{hostPID} also avoids giving the application Pods
+kernel from its own Pod. Disabling \texttt{hostPID} also avoids giving the application Pods
 host process visibility merely for the experiment \cite{kubernetes_process_namespace}.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.98\textwidth,keepaspectratio]
-        {figures/chapter6/kubernetes-testbed-topology.drawio.png}
+        {figures/chapter6/kubernetes-topology.drawio.png}
     \caption[Cross-Pod experimental topology]
-    {Cross-Pod topology on the single Minikube node. The application request
-    travels from the trigger Pod through the Service to the target Pod, while
-    the privileged monitor Pod observes node-kernel events.}
+    {Cross-Pod topology on the single Minikube node.}
     \label{fig:evaluation-cross-pod-topology}
 \end{figure}
 
@@ -145,8 +190,7 @@ AES-beta is a public \gls{ctf} challenge from openECSC-2024
 \cite{openecsc2024_aes_beta}. The experiment used a fixed local copy, adapted
 only where required for repeatable execution in the laboratory. The original
 competition secret was replaced by the synthetic value mounted into the target
-Pod. Image and source checksums were retained with the experimental artefacts
-to distinguish the evaluated workload from later repository changes.
+Pod.
 
 The benign client submits a valid key and plaintext, receives the transformed
 message and compares it with the expected result. It exercises the network
@@ -168,29 +212,40 @@ within five seconds: execution of \path{/bin/sh}; execution of
 \texttt{flag} with a non-negative returned file descriptor. The
 \texttt{process\_tree} strategy relates those observations locally.
 
-Figure~\ref{fig:aes-beta-exploitation-flow} links the application actions to
-the evaluated host evidence. The upper panel gives the minimum exploit context;
-the lower panel owns the transition from final payload to event sequence and
-alert. The diagrams are explanatory rather than packet or event timelines.
-
-\begin{figure}[p]
+\begin{figure}[H]
     \centering
-    \includegraphics[width=0.72\textwidth,keepaspectratio]
-        {figures/chapter6/ctf_exploitation_flow.drawio.png}
-    \vspace{0.8em}
-    \includegraphics[width=0.72\textwidth,keepaspectratio]
-        {figures/chapter6/ctf_exploitation_flow_II.drawio.png}
+
+    \begin{minipage}[c]{0.48\textwidth}
+        \centering
+        \includegraphics[
+            width=\linewidth,
+            keepaspectratio
+        ]{figures/chapter6/ctf_exploitation_flow.drawio.png}
+    \end{minipage}
+    \hfill
+    \begin{minipage}[c]{0.48\textwidth}
+        \centering
+        \includegraphics[
+            width=\linewidth,
+            keepaspectratio
+        ]{figures/chapter6/ctf_exploitation_flow_II.drawio.png}
+    \end{minipage}
+
     \caption[AES-beta exploitation and monitored evidence flow]
-    {Controlled AES-beta flow. The final payload produces shell execution,
-    \texttt{cat} execution and flag access; these effects satisfy the
-    configured four-event detector sequence.}
+    {Controlled AES-beta exploitation flow. The preparation phase is shown on
+    the left, while the final payload and resulting process chain are shown on
+    the right. Shell execution, \texttt{cat} execution and flag access satisfy
+    the configured four-event detector sequence.}
     \label{fig:aes-beta-exploitation-flow}
 \end{figure}
 
+The upper panel gives the minimum exploit context; the lower panel owns the 
+transition from final payload to event sequence and alert. The diagrams are 
+explanatory rather than packet or event timelines.
+
 The alert carries ATT\&CK tactics TA0002 and TA0009 and techniques T1059.004
 and T1005. These identifiers classify the intended meaning of the configured
-evidence \cite{strom2020attack}; they are not an experimental measure of
-technique coverage or detector correctness.
+evidence \cite{strom2020attack}.
 
 \section{Functional Evaluation}
 \label{sec:evaluation-functional}
