@@ -16,8 +16,7 @@ This model allows collection to occur where the kernel handles an operation, wit
 
 This work was carried out as part of an industrial collaboration and targets
 Rocky Linux 8.10. Its enterprise kernel includes vendor backports, so
-compatibility is treated as a design constraint rather than inferred from the
-upstream version number alone \cite{redhat2025backporting}.
+compatibility is treated as a design constraint\cite{redhat2025backporting}.
 
 On this basis, the prototype operates as a host-level runtime monitor. It collects security-relevant events from the target system and applies bounded local detection to individual observations and short sequences.
 
@@ -30,9 +29,9 @@ Not every observation has the same value in isolation. Access to a sensitive fil
 
 Raw kernel telemetry still needs to be narrowed and interpreted. The proposed system separates these tasks between policies and detectors. A policy selects the event domain relevant to a monitoring scenario, reducing noise and unnecessary processing. A detector evaluates the normalised events against reusable conditions and may produce an alert from one event or from a short, locally correlated sequence. Because the monitoring scope is kept apart from the detection logic, analytical rules can change without being moved into the eBPF programs. Alerts may also carry \gls{attack} metadata, giving their evidence a standard security classification \cite{strom2020attack}.
 
-Several practical constraints follow from the target environment. The kernel determines which attachment mechanisms, helpers, maps and portability techniques can be used reliably, while the verifier limits program complexity and memory access. Event enrichment must therefore be divided between kernel and user space. Volume is another concern: a high-frequency hook can make transport, decoding, rule evaluation and output more expensive than collection itself. Since the agent is intended to run beside other workloads, \gls{cpu} and memory consumption are treated as evaluation criteria rather than incidental implementation details.
+Several practical constraints follow from the target environment. The kernel determines which attachment mechanisms, helpers, maps and portability techniques can be used reliably, while the verifier limits program complexity and memory access. Event enrichment must therefore be divided between kernel and user space. Volume is another concern: a high-frequency hook can make transport, decoding, rule evaluation and output more expensive than collection itself. Since the agent is intended to run beside other workloads, \gls{cpu} and memory consumption are treated as evaluation criteria.
 
-The architecture places bounded collection and optional early filtering in eBPF. Normalisation, policy management, detector evaluation, alert generation and presentation remain in user space. That runtime is written in Go, partly because \texttt{libbpfgo} exposes the \texttt{libbpf} facilities needed to load eBPF objects and manage programs, maps and event buffers \cite{aquasecurity_libbpfgo}. A stable contract connects the two sides, while detection logic can change without recompiling the collection programs.
+The architecture places bounded collection and optional early filtering in eBPF. Normalisation, policy management, detector evaluation, alert generation and presentation remain in user space. That runtime is written in Go, partly because \texttt{libbpfgo} exposes the \texttt{libbpf} facilities needed to load eBPF objects and manage programs, maps and event buffers \cite{aquasecurity_libbpfgo}. A stable contract connects the two sides.
 
 \section{Objectives and Thesis Structure}
 \label{sec:introduction-objectives}

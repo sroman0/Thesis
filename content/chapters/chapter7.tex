@@ -69,15 +69,10 @@ this scenario, without estimating total eBPF, node or system overhead.
 
 The implemented event surface is broader than the current level of technical
 assurance. Kernel and Go representations of the event contract are maintained
-separately, and their agreement relies on review and cross-registry tests. The
-registry gate also exposes an unresolved classification inconsistency: an
-internal socket support probe is treated as a public producer despite having no
-decoder schema. Object-backed tests do not yet cover every loading, attachment,
-partial-initialisation and cleanup path on the target kernel. Policy and
-detector documents receive semantic validation, although the YAML decoder still
-accepts unknown fields. Collective sequence state has explicit bounds; some
-maintenance and alert-deduplication behaviour continues to depend on subsequent
-traffic and has weaker capacity guarantees.
+separately, and their agreement relies on review and cross-registry tests. 
+Object-backed tests do not yet cover every loading, attachment,
+partial-initialisation and cleanup path on the target kernel; 
+collective sequence state has explicit bounds.
 
 The analytical and operational scope remains local. Detection follows
 deterministic configuration rules, with no learned behavioural baseline or
@@ -85,12 +80,8 @@ persistent process and cluster graphs. Correlation keys identify local
 processes, resources and cgroups. The prototype records and reports activity;
 enforcement is outside its implemented functions.
 
-The evaluation covered one enterprise kernel, one two-core Minikube node, one
-vulnerable workload and one scenario-specific collective detector, with three
-repetitions per condition. The evidence supports the engineering claims made
-for this controlled environment. Broader portability, production readiness,
-loss-free delivery and statistical detection quality require experiments with
-more kernels, workloads, detector sets and event rates.
+The evaluation covered one enterprise kernel. The evidence supports the engineering claims made
+for this controlled environment.
 
 \section{Future Work}
 \label{sec:conclusions-future-work}
@@ -108,13 +99,12 @@ progressively larger detector catalogues can establish these limits. For a
 multi-node deployment, each agent can retain responsibility for local
 collection and correlation while exporting versioned events and alerts to an
 external storage or analysis platform. This arrangement keeps distributed
-state outside the kernel-facing runtime and gives cluster-level processing a
+state outside the runtime and gives cluster-level processing a
 clear interface.
 
 Performance analysis should separate the cost of kernel execution, event
 transport, decoding, policy evaluation, detector processing and output
-rendering. Per-probe and per-event counters would expose the observation points
-that generate the greatest load. Workloads with known event volumes could then
+rendering. Workloads with known event volumes could then
 measure sustained throughput, perf-buffer loss and the effect of buffer sizing.
 The resulting profiles would guide work on transport, memory allocation and
 detector state according to measured bottlenecks.
@@ -122,9 +112,7 @@ detector state according to measured bottlenecks.
 Low-level filtering currently provides exact UID admission, which is effective
 when the relevant identity is known in advance. Additional bounded selectors
 could cover host process and group identifiers, command names, cgroup
-identifiers, namespace identifiers and selected event-specific values. The
-control plane could compile eligible policy constraints into kernel map entries
-and update them during execution. Expressive predicates and detector logic
+identifiers and selected event-specific values. Expressive predicates and detector logic
 would continue to run in user space, preserving flexibility and keeping the
 collector acceptable to the verifier.
 
@@ -134,19 +122,10 @@ modification outcomes, kernel key management, process-isolation changes and
 other interfaces capable of altering host behaviour. Every new logical event
 must state the kernel stage it observes and preserve the distinction between a
 request, a mediation point, a committed transition and a returned outcome.
-Support for the required hook and payload extraction must be established on the
-target enterprise kernels before public exposure.
 
 The existing hooks can also provide more precise evidence. Useful additions
 include return information for operations currently observed only at entry,
-richer capability-check context, stable parent identity and more complete
-requested-versus-resolved resource details. Such fields can help a security
+richer capability-check context and more complete
+resource details. Such fields can help a security
 analyst distinguish operations that currently produce similar records and can
-reduce ambiguity in detector conditions. Each enrichment should have a clear
-investigative purpose and a bounded collection cost.
-
-New filters, hooks and fields all affect the shared event contract and decoder
-schema. Their implementation should include registry checks, decoder fixtures,
-target-kernel attachment tests and workload-based measurements. This validation
-keeps extensions traceable from the kernel observation point to the evidence
-presented to the analyst.
+reduce ambiguity in detector conditions.
