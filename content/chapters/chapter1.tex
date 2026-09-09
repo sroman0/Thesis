@@ -18,20 +18,46 @@ This work was carried out as part of an industrial collaboration and targets
 Rocky Linux 8.10. Its enterprise kernel includes vendor backports, so
 compatibility is treated as a design constraint\cite{redhat2025backporting}.
 
-On this basis, the prototype operates as a host-level runtime monitor. It collects security-relevant events from the target system and applies bounded local detection to individual observations and short sequences.
-
 \section{Problem Statement}
-\label{sec:introduction-problem-statement}
+  \label{sec:introduction-problem-statement}
 
-The problem considered here is how to turn heterogeneous kernel observations into useful security information on a constrained enterprise Linux system. Event capture is only the beginning. Each record needs a stable identity, an unambiguous transport representation and a schema for decoding its arguments. The decoded event must then pass through the scope selected by the operator and reach a consistent output path. A mismatch between these contracts can cause a valid record to be treated as unknown, assigned to the wrong event or discarded.
+  The problem considered in this thesis is how to turn kernel observations
+  into useful information for security analysis on an enterprise Linux system.
+  Analysts need to identify which processes performed an operation, which
+  resources were involved and what happened. The information available depends
+  on where the operation is observed. For example, a process may try to open
+  a file and be denied access. An observation of the attempt tells us what the
+  process tried to do; an observation of the result tells us whether it
+  succeeded.
 
-Not every observation has the same value in isolation. Access to a sensitive file may be significant under a narrowly defined condition, whereas a credential transition may become meaningful only when followed by process execution or another file access. Drawing on established anomaly-detection terminology, this thesis calls the former a \emph{point event} and the latter a \emph{short collective event pattern} \cite{chandola2009anomaly}. In this work, both are recognised by deterministic rules; no learned baseline, anomaly score or unsupervised model is involved.
+  Understanding an individual operation may also require information about
+  the activity surrounding it. Access to a sensitive file, for example, can
+  be investigated more precisely when the analyst knows which program accessed
+  it and how that program was started. The observations must retain enough
+  information to connect these actions and attribute them to the processes
+  involved.
 
-Raw kernel telemetry still needs to be narrowed and interpreted. The proposed system separates these tasks between policies and detectors. A policy selects the event domain relevant to a monitoring scenario, reducing noise and unnecessary processing. A detector evaluates the normalised events against reusable conditions and may produce an alert from one event or from a short, locally correlated sequence. Because the monitoring scope is kept apart from the detection logic, analytical rules can change without being moved into the eBPF programs. Alerts may also carry \gls{attack} metadata, giving their evidence a standard security classification \cite{strom2020attack}.
+  A running host produces a continuous stream of activity from applications,
+  background services and administrative tasks. The information relevant to
+  an investigation depends on its purpose. Analysts therefore need to select
+  the activity of interest while retaining the details required to understand
+  it. Large volumes of unrelated observations make this task harder and
+  increase the cost of collecting and processing the data.
 
-Several practical constraints follow from the target environment. The kernel determines which attachment mechanisms, helpers, maps and portability techniques can be used reliably, while the verifier limits program complexity and memory access. Event enrichment must therefore be divided between kernel and user space. Volume is another concern: a high-frequency hook can make transport, decoding, rule evaluation and output more expensive than collection itself. Since the agent is intended to run beside other workloads, \gls{cpu} and memory consumption are treated as evaluation criteria.
+  The monitor must also work with the features available on the target system.
+  Linux kernels differ in the operations they expose for monitoring and the
+  information that can be collected. This work targets Rocky Linux 8.10, where
+  the eBPF programs must pass the kernel's checks before they can run.
+  Monitoring also uses CPU and memory, which it shares with the applications
+  being observed.
 
-The architecture places bounded collection and optional early filtering in eBPF. Normalisation, policy management, detector evaluation, alert generation and presentation remain in user space. That runtime is written in Go, partly because \texttt{libbpfgo} exposes the \texttt{libbpf} facilities needed to load eBPF objects and manage programs, maps and event buffers \cite{aquasecurity_libbpfgo}. A stable contract connects the two sides.
+  The central problem is therefore to provide a coherent view of
+  security-relevant host activity from observations that expose different
+  parts of an operation. This view must allow analysts to identify the
+  processes and resources involved, distinguish attempts from outcomes and
+  focus on the activity relevant to their investigation. Achieving this
+  requires sufficiently detailed evidence, reliable interpretation and
+  collection compatible with the monitored system.
 
 \section{Objectives and Thesis Structure}
 \label{sec:introduction-objectives}

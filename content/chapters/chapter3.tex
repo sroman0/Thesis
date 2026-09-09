@@ -62,130 +62,166 @@ active event coverage could differ silently from the requested one.
 \subsection{Functional Requirements}
 \label{subsec:functional-requirements}
 
-Table~\ref{tab:functional-requirements} defines the functional requirements
-that guide the system architecture. They describe system-level capabilities
-rather than individual commands or source-code components.
+A functional requirement states what the system must allow a user to do or
+  what behaviour it must provide. For this monitor, these requirements cover
+  event selection, collection, analysis and reporting.
+  Table~\ref{tab:functional-requirements} lists the required behaviours; the
+  paragraphs that follow explain why they are needed.
+  
+  \begin{table}[H]
+      \centering
+      \small
+      \renewcommand{\arraystretch}{1.18}
+      \begin{tabularx}{\textwidth}{
+          @{}
+          >{\raggedright\arraybackslash}p{0.11\textwidth}
+          >{\raggedright\arraybackslash}X
+          @{}
+      }
+          \toprule
+          \textbf{ID} & \textbf{Functional requirement} \\
+          \midrule
 
-\begin{table}[H]
-    \centering
-    \small
-    \renewcommand{\arraystretch}{1.18}
-    \begin{tabularx}{\textwidth}{
-        @{}
-        >{\raggedright\arraybackslash}p{0.11\textwidth}
-        >{\raggedright\arraybackslash}X
-        @{}
-    }
-        \toprule
-        \textbf{ID} & \textbf{Functional requirement} \\
-        \midrule
+          FR-01 &
+          Let the operator choose which supported types of host activity
+          to monitor. \\
 
-        FR-01 &
-        Collect a selectable set of process and security-relevant events from
-        the monitored host. \\
+          FR-02 &
+          Collect observations and make their fields available in a common
+          format for analysis. \\
 
-        FR-02 &
-        Activate only the kernel observation components required to produce
-        the selected logical events and their dependencies. \\
+          FR-03 &
+          Let the operator filter observations and choose which security
+          checks to enable through configuration files. \\
 
-        FR-03 &
-        Transfer kernel records to user space through the selected perf-event
-        transport and convert valid records into normalised typed events
-        according to an explicit shared contract. \\
+          FR-04 &
+          Check individual observations and sequences of related operations
+          against configured conditions. \\
 
-        FR-04 &
-        Load configurable policies that constrain the monitored event and process
-        scope and may restrict the configured detector catalogue before runtime
-        construction. \\
+          FR-05 &
+          Generate alerts that identify the matching security check and
+          include the observations that triggered it. \\
 
-        FR-05 &
-        Construct a separate detector engine from the definitions admitted by the
-        active configuration and policies, and evaluate deterministic conditions over
-        single events or bounded ordered sequences. \\
+          FR-06 &
+          Provide readable and machine-readable output for observations
+          and alerts, with separate operational diagnostics. \\
 
-        FR-06 &
-        Generate alerts that preserve the observations responsible for a match
-        and propagate the available MITRE ATT\&CK metadata. \\
+          FR-07 &
+          Check configuration before starting, report failures and release
+          resources when monitoring stops. \\
 
-        FR-07 &
-        Maintain independent presentation paths for raw events, detector alerts,
-        and operational diagnostics. \\
+          \bottomrule
+      \end{tabularx}
+      \caption{Functional requirements of the monitoring system.}
+      \label{tab:functional-requirements}
+  \end{table}
 
-        FR-08 &
-        Provide a controlled runtime lifecycle that validates configuration,
-        reports observable failures, responds to cancellation, and releases
-        acquired resources during shutdown. \\
+  FR-01 allows monitoring to follow the operator's needs. The operator can
+  select all or part of the software's supported event catalogue. 
+  For example, an investigation focused on file access may require only the 
+  relevant file events. Unsupported event names must be reported as configuration errors.
 
-        \bottomrule
-    \end{tabularx}
+  FR-02 makes observations from different sources usable by the same analysis
+  components. Each event must identify the observed operation and expose its
+  available context such as the process involved, the accessed
+  resource or the returned result. The system must preserve the meaning of
+  these fields.
 
-    \caption{Functional requirements of the proposed system.}
-    \label{tab:functional-requirements}
-\end{table}
+  FR-03 lets operators narrow monitoring to a particular scenario without
+  changing the software. Configuration files called policies can select or
+  exclude activity using event names, process names, user identifiers and
+  operation details. For example, a policy may retain file-access events
+  involving a particular path. Policies can also restrict the active security
+  checks, called detectors, by their identifiers or descriptive attributes,
+  such as severity and tags.
 
-FR-01--FR-03 cover collection and the event contract; FR-04--FR-06 cover the
-analytical path; and FR-07--FR-08 address presentation and runtime lifecycle.
+  FR-04 allows the software to recognise activity that requires different
+  amounts of evidence. A check may concern one operation (access to a
+  specified file) or a sequence (execution of a program followed by
+  access to that file). Sequence checks must define how the observations are
+  related and the time allowed between them.
+
+  FR-05 allows an analyst to inspect why an alert was raised. An alert must
+  name the detector that matched and retain the relevant observations in
+  their sequence order where applicable. It must also report the configured
+  severity and any supplied security classification metadata.
+
+  FR-06 supports both direct inspection and further processing of results.
+  Text output allows terminal use, while JSON allows other software to read
+  the observations and alerts. Operational messages, such as collection or
+  processing errors, must be distinguishable from the monitored activity.
+
+  FR-07 supports controlled operation of the monitor. Invalid configuration
+  must be reported before collection begins, and failures that prevent startup
+  must be visible to the operator. When monitoring is stopped, or startup fails
+  after resources have been acquired, those resources must be released.
 
 \subsection{Non-Functional and Operational Requirements}
 \label{subsec:nonfunctional-operational-requirements}
 
-The requirements in Table~\ref{tab:nonfunctional-requirements} define the
-compatibility, reliability, and resource constraints under which the functional
-pipeline must operate.
+Functional requirements describe what the software must do, such as collect
+events or generate alerts. Non-functional requirements describe the
+conditions under which those functions must operate, such as the systems
+the software must support and the resources it may consume.
+For this monitor, they define the target Linux environment and the limits
+on collection, stored detection data and CPU usage.
+Table~\ref{tab:nonfunctional-requirements} lists these requirements.
 
 \begin{table}[H]
-    \centering
-    \small
-    \renewcommand{\arraystretch}{1.18}
-    \begin{tabularx}{\textwidth}{
-        @{}
-        >{\raggedright\arraybackslash}p{0.11\textwidth}
-        >{\raggedright\arraybackslash}X
-        @{}
-    }
-        \toprule
-        \textbf{ID} & \textbf{Non-functional or operational requirement} \\
-        \midrule
+      \centering
+      \small
+      \renewcommand{\arraystretch}{1.18}
+      \begin{tabularx}{\textwidth}{
+          @{}
+          >{\raggedright\arraybackslash}p{0.11\textwidth}
+          >{\raggedright\arraybackslash}X
+          @{}
+      }
+          \toprule
+          \textbf{ID} & \textbf{Non-functional requirement} \\
+          \midrule
 
-        NFR-01 &
-        Operate on the identified enterprise-kernel target with explicit
-        compatibility assumptions and validation against the deployed system.
-        \\
+          NFR-01 &
+          Support Rocky Linux 8.10 on the x86-64 kernel specified in
+          Section~\ref{subsec:target-environment-assumptions}. \\
 
-        NFR-02 &
-        Keep kernel-side execution and data extraction bounded and acceptable
-        to the target verifier. \\
+          NFR-02 &
+          Limit kernel-side data collection through fixed buffer capacities
+          and traversal limits. Collection programs must pass the target
+          kernel's eBPF verifier. \\
 
-        NFR-03 &
-        Maintain a consistent kernel-to-user-space event contract and visibly
-        reject unknown or malformed records before further processing. \\
+          NFR-03 &
+          Keep mean CPU consumption below 5\% of one core in the
+          UID-filtered evaluation profile, measured for the monitor's
+          container cgroup. \\
 
-        NFR-04 &
-        Keep detection deterministic, configuration-driven, and independent
-        from event presentation. \\
+          \bottomrule
+      \end{tabularx}
+      \caption{Compatibility and resource requirements of the monitor.}
+      \label{tab:nonfunctional-requirements}
+  \end{table}
 
-        NFR-05 &
-        Bound incomplete collective-detection state in both retention time and
-        capacity. \\
+NFR-01 establishes the environment in which the monitor must work.
+Kernel versions differ in the information and monitoring facilities they
+provide. Specifying the target makes compatibility testable: the required
+programs must load and attach successfully on that system.
 
-        NFR-06 &
-        Report setup failures, transport loss, decoding errors, and detector 
-        failures through dedicated diagnostic channels, separate from monitored events and generated alerts. \\
+NFR-02 controls the work performed whenever a collection program runs.
+The eBPF verifier checks these programs before the kernel accepts them,
+including their memory accesses and execution paths. The collector must
+therefore impose explicit limits on the data it reads. For example, the
+design limits path reconstruction to 20 components and the argument buffer
+to 32,000 bytes. These are separate limits for different operations;
+Chapter~4 explains their implementation. They keep collection predictable
+when an operation exposes large amounts of data.
 
-        NFR-07 &
-        Assess whether mean \gls{cpu} consumption charged to the monitor cgroup
-        remains below 5\% of one core under explicitly defined profiles. \\
-
-        \bottomrule
-    \end{tabularx}
-
-    \caption{Non-functional and operational requirements.}
-    \label{tab:nonfunctional-requirements}
-\end{table}
-
-NFR-07 is an evaluation target, not a performance guarantee. Its result depends
-on the workload, enabled events, detector set, output configuration and
-measurement procedure. Chapter~6 defines the profiles used to assess it.
+NFR-03 expresses the project's resource target for the controlled
+experiment. Monitoring shares the host with the applications being observed,
+so its CPU demand must be measured under a defined workload. The threshold
+applies to the profile using an exact UID filter and to CPU time charged to
+the monitor's container cgroup. Chapter~6 specifies the workload,
+configuration and measurement procedure, and compares this profile with
+filtering disabled.
 
 \section{System Architecture}
 \label{sec:overall-system-architecture}
@@ -267,13 +303,17 @@ of observation point behind one stable event abstraction.
 \subsection{Hook Selection and Logical Events}
 \label{subsec:hook-selection-logical-events}
 
-Chapter~2 established how the observation point determines event semantics.
-At design time, the system therefore selects the smallest practical set of
-hooks that provides the evidence required by each event. The choice must also
-be available on the target kernel and avoid unnecessarily frequent attachment
-points. Stable, dedicated hooks are preferred when they expose sufficient
-information; dynamic probes are used where the exported interfaces leave a
-coverage gap.
+Hooks are selected according to the information required by each event and
+  their availability on the target kernel. The choice also considers how often
+  the attached collection program will run. A hook reached by many unrelated
+  operations requires repeated checks to discard activity outside the selected
+  scope. Where possible, the design therefore uses hooks specific to the
+  operation being monitored.
+
+  Dedicated tracepoints are preferred when they expose the required
+  information. Dynamic probes provide access to kernel functions when suitable
+  tracepoints are unavailable or insufficient. Multiple hooks may be needed
+  to observe both the request and the outcome of an operation.
 
 Table~\ref{tab:hooks-probes-events} distinguishes the architectural concepts
 used to describe instrumentation and event production.
@@ -319,10 +359,10 @@ used to describe instrumentation and event production.
     \label{tab:hooks-probes-events}
 \end{table}
 
-These concepts do not have a one-to-one relationship. A logical event may have
-several producers and may depend on support probes that retain intermediate
-context without emitting a record. The public event contract therefore remains
-independent of the physical arrangement used to construct it.
+The operator selects logical events without having to identify the individual
+kernel programs required to collect them. The system maps each selection to
+its producer probes and support dependencies. This allows the collection
+mechanism to change while preserving the public event name and schema.
 
 \subsection{Early Event Selection and Kernel-Side Filtering}
 \label{subsec:early-event-selection-filtering}
@@ -354,67 +394,105 @@ inputs are reliable and the reduction is measurable. Richer conditions stay in
 user space, where the complete normalised event is available.
 
 \section{Event Contract and Transport Design}
-\label{sec:event-contract-transport-design}
+  \label{sec:event-contract-transport-design}
 
-Kernel producers and the user-space consumer share one representation across
-all event sources. It combines a bounded binary record with a registry that
-supplies its meaning. Because records omit repeated schema metadata, event
-identifiers, encodings and registry definitions must evolve together.
+  The event contract is the agreement between the kernel programs that collect
+  observations and the user-space runtime that reads them. It defines how each
+  event is identified, which fields it contains and how their values are
+  represented. A common format allows observations from different hooks to
+  reach the same analysis components.
 
-\subsection{Stable Binary Event Contract}
-\label{subsec:stable-binary-event-contract}
+  \subsection{Stable Binary Event Contract}
+  \label{subsec:stable-binary-event-contract}
 
-Each public record begins with a common event context and continues with
-indexed arguments. The context carries shared identity and provenance data for
-the process, host, namespaces and execution environment. Event-specific
-arguments describe the observed operation; their indices refer to entries in
-the user-space schema.
+  Each record contains a common context, an argument count and a sequence of
+  event-specific arguments. The context records shared information, including
+  the event identifier, timestamp and process identity. The arguments describe
+  the operation observed, such as the file accessed or the credentials changed.
+  Separating these parts allows events to carry different details while sharing
+  the information needed to identify their source.
 
-The record is not fully self-describing. A kernel producer writes the event
-identifier and encoded values; the registry supplies the public name, argument
-types and ordering. This saves repeated metadata, at the cost of requiring the
-kernel definitions, Go protocol, decoder and registry to agree.
+  Each argument begins with an index followed by its encoded value.
+  The event registry associates each event ID with a schema containing
+  the argument names and types. The decoder uses the event ID to select
+  the schema, then uses each argument index to find the corresponding field.
+  Field names and type descriptions are kept in the registry, reducing the
+  metadata repeated in transmitted records.
 
-\begin{figure}[H]
-    \centering
-    \makebox[\textwidth][c]{%
-        \includegraphics[
-            width=0.78\textwidth,
-            keepaspectratio
-        ]{figures/chapter3/Binary_event_contract.drawio.png}
-    }
-    \caption[Conceptual relationship between the binary event record, the
-user-space event registry, and the resulting normalised event.]
-    {Conceptual relationship between the binary event record, the
-user-space event registry, and the resulting normalised event.}
-    \label{fig:binary-event-contract}
-\end{figure}
+  Figure~\ref{fig:binary-event-contract} illustrates this design through a
+  \texttt{security\_file\_open} event. The example shows three selected
+  arguments with illustrative values; other arguments are omitted.
 
-Unknown or structurally inconsistent records are discarded before policies,
-detectors or output components can use them. The probe registry does not define
-the wire schema, but every public producer must refer to an event known by the
-event registry. Chapter~4 covers record production and Chapter~5 covers the
-receiving registries and admission path.
+  \begin{figure}[H]
+      \centering
+      \includegraphics[
+          width=0.95\textwidth,
+          keepaspectratio
+      ]{figures/chapter3/Binary_event_contract.drawio.png}
+      \caption[Interpretation of an indexed event record]
+      {Interpretation of selected \texttt{security\_file\_open} arguments
+      using the event registry.}
+      \label{fig:binary-event-contract}
+  \end{figure}
 
-\subsection{Perf-Buffer Transport and Failure Boundaries}
-\label{subsec:perf-buffer-failure-boundaries}
+  The event ID selects the \texttt{security\_file\_open} schema.
+  Index 0 identifies \texttt{pathname}, whose value is decoded as a string.
+  Indices 2 and 3 identify \texttt{dev} and \texttt{inode}, decoded as
+  unsigned 32-bit and 64-bit integers, respectively. The resulting event
+  contains these named fields together with the common context.
 
-The event path uses perf-event transport through a
-\texttt{\gls{bpf}\_MAP\_TYPE\_PERF\_EVENT\_ARRAY}. It was selected because it is
-available on the target kernel; the alternative transport models were compared
-in Chapter~2. This choice gives each CPU an independent finite buffer and does
-not establish a total order across CPUs \cite{linux_perf_ring_buffer}.
+  Indices also allow individual arguments to be omitted without changing
+  the meaning of the remaining fields. Whether a producer continues after
+  a collection failure depends on the missing information. For example,
+  \texttt{security\_file\_open} stops without submitting a record if it
+  cannot obtain the resolved path. When a record is submitted, its argument
+  count states how many arguments were written.
 
-Perf-event delivery is asynchronous and finite. If user space cannot drain a
-per-CPU buffer quickly enough, records may be lost and cannot be reconstructed
-from the loss notification. A record that arrives can still fail decoding if
-it violates the binary contract. These are separate failures, and neither
-shows that the corresponding kernel operation did not occur.
+  The producer and decoder must agree on identifiers, indices, field widths,
+  byte order and variable-length encodings. These definitions are maintained
+  separately in C and Go. Registry tests check identifiers and names, while
+  decoder tests exercise selected encoded records. Changes to the format
+  therefore require review of both the producer and the receiving schema.
 
-Collective detectors consequently use arrival order rather than a reconstructed
-causal order across CPUs. Chapter~6 reports the perf-loss diagnostics observed
-under the experimental workload but does not independently measure transport
-loss.
+  The decoder reports unknown event identifiers, indices outside the selected
+  schema and payloads that fail their type-specific checks. Chapter~4 describes 
+  record construction, and Chapter~5 covers decoding.
+
+  \subsection{Perf-Buffer Transport and Failure Boundaries}
+  \label{subsec:perf-buffer-failure-boundaries}
+
+  Records are transferred through per-CPU perf buffers using a \\
+  \texttt{BPF\_MAP\_TYPE\_PERF\_EVENT\_ARRAY} map. This transport was selected
+  for its availability on the target kernel. A collection program submits
+  a record to the buffer associated with its current CPU, and the user-space
+  runtime reads it for processing \cite{linux_perf_ring_buffer}.
+
+  The buffers hold records while collection and processing proceed at
+  different rates. Their capacity is finite: if records arrive faster than
+  the runtime reads them, a buffer can fill and subsequent records may be
+  lost.
+  
+  The runtime addresses temporary increases in activity by separating reading
+  from processing. A dedicated reader retrieves records and places them in
+  a queue while the processing loop decodes and analyses earlier events.
+  This allows reading to continue during short processing delays, provided
+  the queue still has space.
+
+  Selective collection also reduces the incoming workload. Programs unrelated
+  to the selected events remain disabled, and the optional UID filter rejects
+  observations outside its configured scope before transport. Each submission
+  includes only the populated part of the record, reducing buffer use.
+
+  If processing remains slower than collection, the queue eventually fills
+  and blocks the reader. The perf buffers may then fill as well.
+  The runtime reports loss notifications from the reader as warning messages.
+  These contain the number of reported losses, but no information from which
+  the missing records can be recovered. Decoding failures are logged separately
+  to distinguish them from transport losses.
+
+  Missing observations may prevent a detector from completing a sequence.
+  Collection diagnostics therefore help interpret an interval without alerts.
+  Chapter~6 reports whether perf-loss warnings appeared in the retained experimental logs.
 
 \section{User-Space Runtime Design}
 \label{sec:user-space-runtime-design}
@@ -466,75 +544,116 @@ evaluation, and runtime failures are never represented as monitored activity.
 Chapter~5 covers their formats and error handling.
 
 \section{Policy and Detection Architecture}
-\label{sec:policy-detection-architecture}
+  \label{sec:policy-detection-architecture}
 
-The analytical subsystem is prepared before monitoring begins. Policy and
-detector documents are validated and compiled into a plan that later admits
-events and evaluates matches without changing the active kernel
-instrumentation.
+  Policies select the activity relevant to a monitoring task and the detectors
+  to enable. Detectors examine the selected observations and generate alerts
+  when their conditions match. Before monitoring begins, the runtime prepares
+  a plan containing the events to collect, the filters to apply and the
+  detectors to run. These choices remain fixed during the monitoring session.
 
-\subsection{Policy-Based Event Scope}
-\label{subsec:policy-based-event-scope}
+  \subsection{Policy-Based Event Scope}
+  \label{subsec:policy-based-event-scope}
 
-Policies define which observations belong to a monitoring scenario. A finite
-event scope can reduce collection before the eBPF object is loaded; an
-open-ended scope retains the broader plan. Policies may also narrow the detector
-catalogue through metadata. Conditions that require decoded values are applied
-in user space, and a rejected event reaches neither output nor detectors. With
-no policy, this admission boundary is permissive.
+  Policies can filter observations by event name, process command, UID and
+  argument values. They can also select detectors by identifier or metadata,
+  such as severity and tags.
 
-All active policies contribute to one effective monitoring plan, not separate
-pipelines. Policies choose relevant observations and detectors; detectors
-decide whether admitted evidence should produce an alert. Chapter~5 describes
-how both are implemented.
+  Table~\ref{tab:monitoring-plan-example} shows an illustrative plan for
+  investigating execution and file access by processes running under UID 1000.
+  The example assumes one active policy and an available detector definition
+  named \texttt{file-access-check} that examines file-opening events.
 
-\subsection{Point and Collective Detectors}
-\label{subsec:point-collective-detectors}
+  \begin{table}[H]
+      \centering
+      \small
+      \renewcommand{\arraystretch}{1.18}
+      \begin{tabularx}{\textwidth}{
+          @{}>{\raggedright\arraybackslash}p{0.30\textwidth}
+          >{\raggedright\arraybackslash}X@{}
+      }
+          \toprule
+          \textbf{Plan element} & \textbf{Example} \\
+          \midrule
+          Operator event selection &
+          \texttt{sched\_process\_exec}, \texttt{security\_file\_open},
+          \texttt{chmod} \\
+          Policy event selection &
+          \texttt{sched\_process\_exec}, \texttt{security\_file\_open} \\
+          Resulting collection &
+          \texttt{sched\_process\_exec}, \texttt{security\_file\_open} \\
+          Event filter & UID equals 1000 \\
+          Active detector & \texttt{file-access-check} \\
+          \bottomrule
+      \end{tabularx}
+      \caption{Illustrative monitoring plan for execution and file access.}
+      \label{tab:monitoring-plan-example}
+  \end{table}
 
-The terms \emph{point} and \emph{collective} refer to the amount of evidence a
-detector needs. A point detector considers one observation. A collective
-detector looks for an explicitly configured local sequence. Both are
-deterministic and rule based; no baseline is learned and no anomaly score is
-calculated.
+  The operator initially selects three event types. The policy retains two,
+  so the programs used only for \texttt{chmod} are left disabled.
+  The UID condition is checked after decoding: events from other UIDs reach
+  neither event output nor detectors. This condition does not automatically
+  enable the separate kernel UID filter.
 
-Both receive the same normalised events used by policies. Point matches can
-produce an alert immediately. Collective evaluation retains bounded partial
-state until a sequence completes or expires. The two forms share the same
-pipeline.
+  Before monitoring starts, the system compares the events selected
+  by the operator with those listed in the policies. When all rules that admit
+  activity list the events they need, collection is limited to the event types
+  shared by the two selections. If a rule allows any event type, the operator's
+  selection is kept. Conditions on process names, UIDs and argument values
+  are then checked after the events have been collected and decoded.
 
-Detector definitions declare their input events but do not attach probes. Those
-events must already be present in the monitoring plan when the detector engine
-is built, so event-time matching cannot alter kernel instrumentation.
+  All active policies contribute to one shared plan. An event must match an
+  allowing policy, and a matching suppression policy overrides that decision.
+  Without policies, events pass this gate. Selecting detectors determines
+  which checks run; it does not independently enable additional kernel events.
 
-\subsection{Bounded Local Correlation}
-\label{subsec:bounded-local-correlation}
+  \subsection{Point and Collective Detectors}
+  \label{subsec:point-collective-detectors}
 
-Collective detectors relate observations through configured local identities.
-A process key combines the host process identifier with its start time, and a
-parent relation covers only the immediate parent. Files use a device--inode
-pair; cgroups use their node-local kernel identifier. Composite strategies
-require every configured dimension to match. None of these keys represents a
-persistent process graph, arbitrary ancestry or Kubernetes workload identity.
+  A point detector evaluates one event against configured conditions.
+  For example, \texttt{file-access-check} could generate an alert when a
+  file-opening observation identifies a specified sensitive path.
 
-Partial sequences have finite lifetimes and a per-detector capacity. If the
-event model cannot provide a requested correlation dimension, configuration is
-rejected rather than approximated with weaker evidence. This supports short
-local sequences without introducing a general-purpose complex-event processing
-engine \cite{cugola2012processing,agrawal2008eventstreams}. Exact transitions,
-limits and pruning behaviour belong to Chapter~5.
+  A collective detector evaluates an ordered sequence of related events.
+  For example, a check may require a credential change followed by program
+  execution by the same process. Events are considered in their arrival order.
+  A configured time window limits how long the runtime waits for completion,
+  starting when it stores the first matching observation.
 
-\subsection{Alert Evidence and MITRE ATT\&CK Metadata}
-\label{subsec:alert-evidence-attack}
+  Both forms use explicit, deterministic conditions and consume the same
+  decoded event model. Chapter~5 explains how their definitions are loaded
+  and evaluated.
 
-An alert preserves detector identity, severity and the evidence that completed
-the match: one event for a point detector or an ordered set for a collective
-detector. It does not have to be reconstructed from presentation output.
+  \subsection{Bounded Local Correlation}
+  \label{subsec:bounded-local-correlation}
 
-Detector metadata may include MITRE ATT\&CK tactics and techniques. Policies can
-use these fields to select definitions, and matching alerts retain them for
-classification and downstream organisation \cite{strom2020attack}. The mapping
-supplements the detector evidence; Chapter~5 describes how it is validated and
-propagated.
+  Sequence detection requires a way to identify observations that belong
+  together. Several processes can share a UID, so that value alone cannot
+  establish that two events came from the same process. Process correlation
+  uses the host PID and process start time, distinguishing separate lifetimes
+  that reuse the same PID.
+
+  Other supported relationships use the immediate parent process, a file's
+  device and inode numbers, or a local cgroup identifier. Several dimensions
+  can be combined when all must agree.
+
+  Incomplete sequences are subject to the time and capacity limits stated
+  in Section~\ref{subsec:nonfunctional-operational-requirements}.
+  Unsupported correlation strategies are rejected during configuration.
+  An event that cannot provide a valid correlation key does not advance
+  a sequence. Chapter~5 describes how this state is stored and removed.
+
+  \subsection{Alert Evidence and MITRE ATT\&CK Metadata}
+  \label{subsec:alert-evidence-attack}
+
+  An alert identifies the detector, reports its configured severity and
+  preserves the observations that satisfied its conditions. 
+  The analyst can inspect this evidence to understand why the alert was raised.
+
+  Detector definitions may include MITRE ATT\&CK labels describing the attack
+  tactics and techniques they are intended to identify \cite{strom2020attack}.
+  Policies can use these labels to choose which detectors to enable.
 
 \section{Design Decisions and Scope Boundaries}
 \label{sec:design-decisions-boundaries}
