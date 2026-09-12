@@ -468,10 +468,11 @@ version number
 \label{sec:related-runtime-security-tools}
 
 Runtime security tools differ in where they select events, interpret evidence
-and act on a match. The comparison here uses Tracee, Falco and Tetragon to mark
-three relevant positions in that design space: an event-oriented pipeline, a
-declarative alerting engine and a hook-centred system with optional response
-\cite{her2025ebpfsecuritytools}.
+and act on a match. This section introduces Tracee, Falco and Tetragon to explain how existing
+tools collect kernel activity and help identify security-relevant behaviour.
+The comparison focuses on event selection, detection and output.
+These aspects informed the design of the host-level monitor developed
+in this thesis. \cite{her2025ebpfsecuritytools}.
 
 \subsection{Tracee}
 \label{subsec:tracee}
@@ -574,11 +575,10 @@ functionality on kernel capabilities and BTF availability
 \subsection{Comparative Summary}
 \label{subsec:runtime-tools-comparison}
 
-Table~\ref{tab:runtime-security-tools-comparison} places the three systems side
-by side. Tracee is the closest reference for the prototype's event-oriented
-pipeline; Falco and Tetragon mark the neighbouring rule-centred and
-enforcement-capable designs. The comparison is architectural, since the tools
-differ substantially in scope and are not interchangeable.
+Table~\ref{tab:runtime-security-tools-comparison} summarises the main
+approach of each tool and its relevance to this work. It highlights how
+the tools organise event processing, generate alerts and apply filters
+or response actions.
 
 \begin{table}[H]
     \centering
@@ -623,22 +623,27 @@ differ substantially in scope and are not interchangeable.
     \label{tab:runtime-security-tools-comparison}
 \end{table}
 
+The comparison shows several approaches that are useful for this work.
+Tracee separates collection from policy evaluation and detection.
+Falco uses configurable rules to generate alerts.
+Tetragon supports filtering in the kernel and actions in response to
+observed activity. The prototype follows Tracee's separation of collection
+and analysis, using policies to select activity and detectors to generate
+alerts with supporting evidence.
+
 \section{Positioning of the Proposed Work}
 \label{sec:positioning-proposed-work}
 
-The proposed work covers a bounded part of Linux runtime security: process and
-host-security monitoring on the enterprise environment specified in
-Chapter~3. Its design assumes only the capabilities verified on that target.
+The tools reviewed above provide the starting point for this thesis.
+Tracee is the main architectural reference, while Falco and Tetragon
+offer useful comparisons for performance evaluation.
+Their capabilities show that the challenge extends beyond capturing
+events: the collected information must also be useful to the analyst
+and affordable to process.
 
-The prototype does not claim these mechanisms as novel in isolation. Tracee establishes
-the event-oriented separation of collection, policy selection, detection and
-output; Falco provides a mature example of declarative event rules and alerts;
-and Tetragon illustrates a more kernel-centred design with enforcement support
-\cite{aquasecurity_tracee_policies,aquasecurity_tracee_detectors,
-falcosecurity_falco_rules,cilium_tetragon_tracing_policy}.
-
-This thesis integrates those established ideas in a compact prototype tailored
-to the selected enterprise kernel. The work concentrates on compatibility,
-complementary observation points and the contract that turns kernel records
-into typed user-space events. Chapter~3 develops the corresponding system
-design.
+Building on these approaches, this thesis focuses on combining observations
+of host activity to help an analyst understand what a process has done.
+A single operation may provide limited information, instead related
+observations can explain the behaviour more clearly: the work therefore
+examines how configurable monitoring and correlation can bring this
+evidence together.

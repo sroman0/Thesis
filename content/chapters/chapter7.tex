@@ -42,46 +42,54 @@ enterprise-kernel environment.
 \section{Main Results}
 \label{sec:conclusions-main-results}
 
-The functional campaign established the intended node-local observation
-boundary. In the single-node Minikube testbed, the monitor, vulnerable target
-and trigger ran in three separate Pods. All three exploit repetitions recovered
-the synthetic flag and produced one complete alert containing the configured
-four-event sequence. The three repetitions of the selected benign interaction
-returned the expected application response without completing that sequence.
-These runs demonstrate repeatable same-node, cross-Pod visibility and detection
-for the controlled scenario. The correlation evidence covers the same-process
-path exercised by the selected detector; its other process relationships were
-outside the experiment.
+This work produced a host-level security monitor that brings together
+the collection, interpretation and analysis of different kinds of kernel
+activity. The tool gives these observations a common representation,
+making them available for both direct inspection and automated checks.
+This provides a consistent way to examine behaviour that involves
+different host resources.
 
-The performance campaign measured the effect of exact UID admission under the
-same workload. Across three runs, the filtered profile consumed a mean of
-0.46\% of one \gls{cpu} core in the monitor-container cgroup, and every run
-remained below the project's 5\% gate. The unfiltered profile recorded a mean
-of 5.73\%. Using the retained measurements, filtering reduced the mean by
-approximately 92.0\% while preserving flag recovery and the complete alert in
-every monitored run. The metric represents CPU time charged to the monitor
-cgroup as a percentage of one core and excludes kernel work charged elsewhere.
-The result therefore quantifies the user-space benefit of early admission for
-this scenario, without estimating total eBPF, node or system overhead.
+The resulting tool supports semi-automated monitoring by a security
+analyst. Configured rules identify activity of interest, and alerts
+preserve the observations that triggered them. The analyst can use this
+information to investigate what is happening on the machine and assess
+the relationships between observed operations. The collected evidence
+can also support forensic analysis by helping reconstruct process
+activity and access to host resources. Its usefulness depends on the
+monitoring scope and the completeness of the observations retained.
+
+Configuration allows the same tool to address different monitoring needs.
+Within the supported event set, the analyst can focus on process activity,
+memory operations, filesystem access, credentials or permissions.
+Policies and detector definitions adapt the analysis to the task,
+allowing the monitoring scope and the conditions of interest to change
+without modifying the collection code.
+
+The work also highlights a trade-off that affects scalability: broader
+observation provides more information but increases the volume of data
+to process. Supporting broader scopes and more
+concurrent activity will require further performance improvements and
+tests at higher event rates. The prototype provides a basis for this
+development, while its current evaluation establishes its behaviour
+under the controlled workload.
 
 \section{Limitations}
 \label{sec:conclusions-limitations}
 
-The implemented event surface is broader than the current level of technical
-assurance. Kernel and Go representations of the event contract are maintained
-separately, and their agreement relies on review and cross-registry tests. 
-Object-backed tests do not yet cover every loading, attachment,
-partial-initialisation and cleanup path on the target kernel; 
-collective sequence state has explicit bounds.
+The evaluation covered a small set of scenarios on the target system.
+Further tests are needed to assess other attacks, false alerts and
+behaviour under sustained load. Test coverage also needs to expand
+across the supported events and runtime failure conditions.
 
-The analytical and operational scope remains local. Detection follows
-deterministic configuration rules, with no learned behavioural baseline or
-persistent process and cluster graphs. Correlation keys identify local
-processes, resources and cgroups. The prototype records and reports activity;
-enforcement is outside its implemented functions.
+The implemented hooks cover a subset of host-level kernel activity.
+Operations outside this set remain unobserved, leaving gaps in the
+information available to the analyst. Additional hooks are needed
+to broaden coverage and support further detection scenarios.
 
-The evaluation covered one enterprise kernel. The evidence supports the engineering claims made
-for this controlled environment.
+Correlation is local and retains incomplete sequences for a limited
+time and within a fixed capacity. The current design therefore supports
+short patterns; long investigations and relationships across nodes
+require additional analysis outside the monitor.
 
 \section{Future Work}
 \label{sec:conclusions-future-work}

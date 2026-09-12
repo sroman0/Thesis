@@ -1,33 +1,69 @@
 \chapter{Kernel-Space Event Collection Implementation}
 \label{ch:kernel-space-implementation}
-\label{ch:system-implementation}
 
 This chapter describes the kernel-space implementation of the design presented
-in Chapter~3. It begins with the build artefacts and common event-construction
+in Chapter \ref{ch:requirements-system-design}. It begins with the build artefacts and common event-construction
 code, then examines the implemented hook families, binary record format,
 perf-buffer transport, early \gls{uid} admission and compatibility work for the
-target Rocky Linux kernel. Chapter~5 takes over at the user-space boundary;
-Chapter~6 evaluates the completed system.
+target Rocky Linux kernel. Chapter \ref{ch:user-space-implementation} takes over at the user-space boundary;
+Chapter \ref{ch:experimental-evaluation} evaluates the completed system.
 
 \section{Build Toolchain and Project Organisation}
 \label{sec:implementation-build-organisation}
 
-The build has three ordered stages. The libbpf source under
-\path{3rdparty/libbpfgo/libbpf/src} is first compiled into the local static
-library \path{dist/libbpf/obj/libbpf.a}, with its headers and package metadata.
-Clang then compiles the eBPF source for x86-64 into
-\path{dist/project.bpf.o}. Finally, \gls{cgo} links the Go application against
-the local libbpf archive and libbpfgo bindings to produce
-\path{dist/project}. The Makefile enforces this order and avoids silently using
-system copies of the kernel-facing dependencies.
+The project combines C sources for kernel collection with a Go application
+  for loading, event processing and detection. Figure~\ref{fig:build-toolchain}
+  shows how these sources and their dependencies produce the executable.
 
-The Go executable embeds the eBPF object, so
-\path{dist/project.\gls{bpf}.o} must exist before the Go package is compiled. The
-normal runtime path does not require a second object file beside the
-executable, although an external object can be supplied for development and
-compatibility testing. Embedding does not remove host dependencies: loading
-still requires suitable kernel BTF, privileges and the libraries used by
-\gls{cgo}.
+  \begin{figure}[H]
+      \centering
+      \includegraphics[
+          width=0.98\textwidth,
+          keepaspectratio
+      ]{figures/chapter4/build-toolchain.drawio.png}
+      \caption[Build chain of the monitoring application]
+      {Build chain of the monitoring application.}
+      \label{fig:build-toolchain}
+  \end{figure}
+
+  The build first compiles the local libbpf sources into a static library
+  and prepares their headers and package metadata. Clang then compiles the
+  collection sources into an eBPF object, using definitions for the target
+  x86-64 kernel. Finally, the Go build uses \gls{cgo} to link the application
+  through the local libbpfgo bindings to libbpf. The Makefile declares these
+  dependencies so that the required artefacts exist before each stage runs.
+
+  The eBPF object and the static library enter the final build in different
+  ways. The library is linked to provide kernel-facing operations, while
+  the eBPF object is embedded as bytes in the executable. At startup, the
+  runtime can retrieve those bytes to load the collection programs.
+  The usual deployment therefore requires no separate eBPF object beside
+  the executable, although an external object can be supplied for development
+  and compatibility testing.
+
+  \begin{figure}[H]
+      \centering
+      \includegraphics[
+          width=0.88\textwidth,
+          height=0.55\textheight,
+          keepaspectratio
+      ]{figures/chapter4/project-source-organisation.png}
+      \caption[Main source groups]
+      {Main source groups and their responsibilities.}
+      \label{fig:project-source-organisation}
+  \end{figure}
+
+  Figure~\ref{fig:project-source-organisation} identifies the main source
+  locations used in the implementation chapters. The groups distinguish
+  command handling, kernel collection, loading, event interpretation and
+  analysis.
+
+  The collection programs share helpers for reading kernel data and
+  constructing records. The Go loading code manages the programs and their
+  attachments, while the event registry and decoder define how received
+  records are interpreted. Policies, detectors and output components use
+  that decoded representation. The remainder of this chapter examines the
+  kernel collection code; Chapter \ref{ch:user-space-implementation} describes the Go runtime and analysis.
 
 \section{eBPF Program Implementation}
 \label{sec:implementation-ebpf-programs}

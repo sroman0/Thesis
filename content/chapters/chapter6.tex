@@ -128,8 +128,15 @@ runtime, while the host Docker \gls{cli} was v26.1.3. The CPU and memory values 
 the requested Minikube configuration because realised allocatable resources
 were not preserved as experimental evidence.
 
-Table~\ref{tab:evaluation-environment} combines the environment and workload
-roles. All three Pods were scheduled on the same node and therefore shared its
+Table~\ref{tab:evaluation-environment} summarises the host configuration
+and the three components used in the experiment: the monitor collects
+kernel events, the target runs the vulnerable service, and the trigger
+executes the test clients. For each component, the table reports its
+deployment form, execution identity and access restrictions. These details
+show which component can access the host interfaces required for monitoring
+and which components operate under restricted permissions.
+
+All three Pods were scheduled on the same node and therefore shared its
 kernel, but they did not share a Pod or process namespace. Kubernetes gives
 Pods separate network identities; the ClusterIP Service instead selected the
 target endpoint on TCP port 1337 \cite{kubernetes_pod_networking}. The observed
@@ -162,13 +169,22 @@ Service address was \texttt{10.102.19.49} and its target endpoint was
 \end{table}
 
 The monitor's privileged security context and host-interface mounts provide
-the access needed by this prototype to load and attach its eBPF programs. They
-are sufficient laboratory permissions, not a demonstrated least-privilege
-deployment \cite{kubernetes_privileged_containers}. Target and trigger instead
-ran as separate non-root identities, dropped all capabilities and disabled
-privilege escalation. Service-account token automounting was disabled for all
-Pods. Resource requests were present, but resource limits were not, leaving
-the components able to contend for the single node.
+the access needed by this prototype to load and attach its eBPF programs: they
+are sufficient laboratory permissions \cite{kubernetes_privileged_containers}.
+
+Target and trigger ran under different non-root UIDs to distinguish their
+activity during the experiment. Neither component required administrative
+privileges, so all Linux capabilities were dropped and privilege escalation
+was disabled. These restrictions kept the service and its clients operating
+with ordinary application permissions. Service-account token automounting
+was disabled for all Pods because the experiment did not require them to
+access the Kubernetes API.
+
+Resource requests were specified to guide Pod scheduling. No CPU or memory
+limits were configured, allowing resource consumption to be observed without
+an additional limit imposed by the experiment. The components
+could therefore compete for the node's available resources, which must be
+considered when interpreting the performance measurements.
 
 Figure~\ref{fig:evaluation-cross-pod-topology} shows the boundary evaluated by
 the experiment. The trigger reaches the target through Kubernetes networking;
@@ -194,56 +210,72 @@ only where required for repeatable execution in the laboratory. The original
 competition secret was replaced by the synthetic value mounted into the target
 Pod.
 
-The benign client submits a valid key and plaintext, receives the transformed
-message and compares it with the expected result. It exercises the network
-service without requesting the flag. The exploit first leaks the information
-needed to locate the library and reconstructs the stack canary by testing the
-unknown bytes. Its final worker supplies a payload that invokes
-\texttt{system("cat flag")}. The resulting target-side behaviour installs
-\path{/bin/sh}, then \path{/bin/cat}, and accesses the flag at
-\path{/opt/aes-beta/flag}. Each retained exploit reported 1,793 workers and
-recovered the synthetic flag.
+The challenge implements an Asynchronous Encryption Service. The client
+supplies a key and submits messages, each processed by a separate worker
+created through \texttt{fork}. It can later retrieve the worker's output
+and termination status. The benign client submits a valid key and plaintext
+and checks that the returned message matches the expected result.
 
-The monitor is not a network intrusion detector and does not inspect the
-payload, leak or canary search. Its experimental policy admits the selected
-target events and, in the filtered profile, applies exact effective UID 10001
-admission in kernel space. The collective detector requires four observations
+Figure~\ref{fig:aes-beta-exploitation-flow} illustrates the preparation and
+execution of the AES-beta exploit.
+
+\begin{figure}[H]
+    \centering
+
+    \makebox[\textwidth][c]{%
+        \begin{minipage}[c]{0.55\textwidth}
+            \centering
+            \includegraphics[
+                width=\linewidth
+            ]{figures/chapter6/ctf_exploitation_flow.drawio.png}
+        \end{minipage}
+        \hspace{0.01\textwidth}
+        \begin{minipage}[c]{0.55\textwidth}
+            \centering
+            \includegraphics[
+                width=\linewidth
+            ]{figures/chapter6/ctf_exploitation_flow_II.drawio.png}
+        \end{minipage}
+    }
+
+    \caption[AES-beta exploitation and monitored evidence.]
+    {AES-beta exploitation and monitored evidence.}
+
+    \label{fig:aes-beta-exploitation-flow}
+\end{figure}
+
+The left panel shows how the exploit prepares the final attack. The service
+prints the supplied key using \texttt{printf} without a fixed format string,
+allowing specially crafted input to read or modify memory. The exploit uses
+this vulnerability to obtain an address from the C standard library,
+\texttt{libc}, and to increase the permitted message size after its initial
+validation. A subsequent message can therefore exceed the worker's fixed
+stack buffer and overwrite adjacent memory.
+
+Before redirecting execution, the exploit reconstructs the stack canary,
+a value checked to detect corruption of the stack. It tests candidate bytes
+through repeated message submissions and examines each worker's termination
+status. An incorrect candidate causes the worker to abort; a successful
+candidate allows the search to continue with the next byte. This explains
+the many workers shown in the left panel and the process activity generated
+during preparation.
+
+The right panel shows the final payload. It preserves the recovered canary
+and uses return-oriented programming, which combines existing instruction
+sequences, to invoke \texttt{system("cat flag")}. This causes shell execution,
+followed by \texttt{cat}, which reads the synthetic flag from
+\path{/opt/aes-beta/flag}. The command output passes through the worker's
+output pipe and is returned to the client by the service.
+
+The monitor collects process-execution and file-access events generated by
+the attack. The experimental policy selects the relevant target activity.
+In the filtered profile, a separately configured kernel UID filter also
+restricts collection to UID 10001. The collective detector requires four observations
 within five seconds: execution of \path{/bin/sh}; execution of
 \path{/bin/cat}; an LSM \texttt{security\_file\_open} observation resolving
 \path{/opt/aes-beta/flag}; and an \texttt{open} event for caller pathname
 \texttt{flag} with a non-negative returned file descriptor. The
 \texttt{process\_tree} strategy relates those observations locally.
-
-\begin{figure}[H]
-    \centering
-
-    \begin{minipage}[c]{0.48\textwidth}
-        \centering
-        \includegraphics[
-            width=\linewidth,
-            keepaspectratio
-        ]{figures/chapter6/ctf_exploitation_flow.drawio.png}
-    \end{minipage}
-    \hfill
-    \begin{minipage}[c]{0.48\textwidth}
-        \centering
-        \includegraphics[
-            width=\linewidth,
-            keepaspectratio
-        ]{figures/chapter6/ctf_exploitation_flow_II.drawio.png}
-    \end{minipage}
-
-    \caption[AES-beta exploitation and monitored evidence flow]
-    {Controlled AES-beta exploitation flow. The preparation phase is shown on
-    the left, while the final payload and resulting process chain are shown on
-    the right. Shell execution, \texttt{cat} execution and flag access satisfy
-    the configured four-event detector sequence.}
-    \label{fig:aes-beta-exploitation-flow}
-\end{figure}
-
-The upper panel gives the minimum exploit context; the lower panel owns the 
-transition from final payload to event sequence and alert. The diagrams are 
-explanatory rather than packet or event timelines.
 
 The alert carries ATT\&CK tactics TA0002 and TA0009 and techniques T1059.004
 and T1005. These identifiers classify the intended meaning of the configured
@@ -581,64 +613,119 @@ and uses the unfiltered mean as its denominator. It is not the total cost of
 eBPF execution, the total node overhead, or a production capacity estimate.
 
 \section{Discussion of Results}
-\label{sec:evaluation-discussion}
+  \label{sec:evaluation-discussion}
 
-The functional and performance observations answer complementary questions.
-The cross-Pod campaign shows that the monitor does not need to share a Pod,
-network namespace or process namespace with the target to observe its
-node-kernel activity. The four-stage alert also demonstrates that request,
-mediation and successful syscall evidence can be preserved together across the
-implemented pipeline. The result is stronger than observing a single hook, but
-it remains tied to one known sequence and one same-process correlation path.
+  Cross-Pod visibility was expected because the monitor and target ran on
+  the same node and shared its kernel. The monitor's eBPF programs observed
+  operations in that kernel, including those performed by processes in other
+  Pods. The experiment verified that the prototype's permissions, event
+  collection and user-space processing supported this deployment, the resulting
+  alert preserved the four configured observations
 
-The profile comparison quantifies the benefit of applying an exact admission
-criterion before event transport. With UID filtering disabled, the complete
-selected event stream reached user space, where policies and detectors
-continued to perform their intended semantic selection. Enabling the filter
-discarded events from other effective UIDs earlier and reduced the measured
-CPU consumption of the monitor while preserving the alert required by the
-experiment.
+  The prototype's performance results show the effect of applying an exact
+  UID filter before event transport. Enabling the filter reduced mean
+  monitor-container CPU consumption from 5.73\% to 0.46\% of one core. 
+  The resulting alert preserved the four configured observations. 
+  Events from other effective UIDs were discarded before reaching user space. 
+  With the filter disabled, policies and detectors processed the broader selected event stream.
 
-This optimisation depends on prior knowledge of a suitable UID and therefore
-has a narrower operational scope than user-space policies. A security analyst
-may not know the relevant process identity in advance, and several processes
-or containerised workloads may share the same numeric UID.
+  \subsection{Comparison with Falco and Tetragon}
+  \label{subsec:evaluation-tool-comparison}
 
-\section{Threats to Validity and Current Limitations}
-\label{sec:evaluation-threats-validity}
+  Falco 0.44.1 and Tetragon 1.7.1 were evaluated on the same Minikube testbed
+  using the AES-beta exploit. Each tool was tested in three runs with a UID
+  condition and three without it.
+  The other monitors were disabled during each campaign. CPU and memory were
+  measured at the monitor-container cgroup boundary using the same sampling
+  script.
 
-\noindent\textbf{Internal validity.}
-The experiment ran sequentially on one busy two-core node, and unmeasured
-background activity could influence CPU samples. Resource limits were absent, so monitor, target
-and cluster services could contend.
+  Table~\ref{tab:evaluation-tool-comparison} compares the observed CPU
+  consumption.
 
-\medskip
-\noindent\textbf{Construct validity.}
-Monitor-container cgroup CPU measures work charged to that cgroup; it does not
-include all kernel execution induced by eBPF programs and is therefore not
-total overhead. Cgroup memory and cgroup \texttt{total\_rss} capture different
-memory views.
-Detector completion measures conformance with one predefined sequence, while 
-three benign controls cannot establish a general false-positive rate or detection accuracy.
+  \begin{table}[H]
+      \centering
+      \small
+      \renewcommand{\arraystretch}{1.14}
+      \begin{tabularx}{\textwidth}{@{}l X r@{}}
+          \toprule
+          \textbf{Tool} & \textbf{Profile} &
+          \shortstack{\textbf{Mean CPU}\\\textbf{(\% one core)}} \\
+          \midrule
+          Prototype & With UID filter    & 0.46 \\
+                    & Without UID filter & 5.73  \\
+          \addlinespace
+          Falco     & With UID condition    & 5.15  \\
+                    & Without UID condition & 4.89  \\
+          \addlinespace
+          Tetragon  & With UID selector    & 1.88 \\
+                    & Without UID selector & 1.82 \\
+          \bottomrule
+      \end{tabularx}
+      \caption{Monitor-container CPU in the retained campaigns.}
+      \label{tab:evaluation-tool-comparison}
+  \end{table}
 
-\medskip
-\noindent\textbf{External validity.}
-The study uses one Rocky Linux kernel, one Docker-backed Minikube node, one CTF
-service and one scenario-specific detector. Results may differ with other
-kernels, attachment availability, container runtimes, workload rates and node
-sizes. All components were co-located, so neither cross-node observation nor
-cluster-wide correlation was evaluated. The exact UID key was controlled for
-this workload and should not be generalised to workload identity.
+  The prototype recorded the lowest mean CPU consumption with UID filtering
+  enabled, at 0.46\%, compared with 1.88\% for Tetragon and 5.15\% for Falco.
+  Without the UID condition, Tetragon recorded the lowest value at 1.82\%,
+  followed by Falco at 4.89\% and the prototype at 5.73\%.
 
-\medskip
-\noindent\textbf{Conclusion validity.}
-Three runs per profile permit a transparent descriptive comparison but do not
-support strong inferential statistics. High node utilisation and sequential
-execution make duration and target-CPU differences unsuitable for causal
-conclusions. The approximately 92.0\% value is consequently reported
-only for the filtered-versus-unfiltered monitor-container cgroup CPU means.
+  The large reduction observed in the prototype reflects the scope of its
+  kernel UID filter, which rejects unrelated observations before transport.
+  Falco applies the UID condition during rule evaluation. Tetragon applies
+  its UID selector to the two configured file-access hooks, while its base
+  process sensor remains active.
 
-%\section{Evaluation Summary}
+  All six retained runs for each comparison tool recovered the flag and
+  produced the required evidence. Falco generated separate alerts for shell
+  execution, \texttt{cat} execution and flag opening. Tetragon exported the
+  four observations as individual events. The prototype preserved its four
+  observations in one correlated alert.
+
+  The results suggest that reducing the event volume before transport explains
+  much of the prototype's CPU saving, since fewer events require decoding and
+  analysis. Falco continued collecting events, while Tetragon's pathname
+  selectors already restricted file-access observations. Their additional UID
+  checks therefore had limited scope to reduce processing and coincided with
+  small CPU increases of 0.26 and 0.06 percentage points, respectively.
+  The checks may have added some cost without a corresponding saving.
+
+  %The prototype's filtered result also depends on
+  %knowing a suitable UID in advance, which may be unavailable when
+  %investigating an unknown attack.
+
+\section{Current Limitations}
+  \label{sec:evaluation-threats-validity}
+
+  \noindent\textbf{Experimental conditions.}
+  The experiments ran on a busy two-core node without resource limits.
+  Background activity and competition between the monitor, target and cluster
+  services could affect the measurements. The tool comparisons also used
+  separate campaigns, and the Tetragon campaign restarted the target after
+  each monitor restart. Repeating the tests on a dedicated node with the
+  same startup procedure would make the results more comparable.
+
+  \medskip
+  \noindent\textbf{Workload coverage.}
+  The prototype targets the Rocky Linux kernel used in the experiment.
+  Within that environment, the evaluation covered one service, one exploit
+  and a small set of benign interactions. The results show that the
+  configured sequence was detected, but provide limited evidence about
+  other attacks or false alerts. Additional scenarios on the same target
+  kernel, including higher event rates and several concurrent applications,
+  would broaden this assessment. The UID-filtered profile also assumes
+  that a suitable UID is known in advance; broader monitoring scenarios
+  should be evaluated without that assumption.
+
+  \medskip
+  \noindent\textbf{Number of repetitions.}
+  Three runs per profile provide an initial descriptive comparison.
+  Small CPU differences, particularly those observed between the Falco
+  and Tetragon profiles, may reflect variation between runs.
+  More repetitions with randomised profile order would help establish
+  whether these differences persist.
+  
+  %\section{Evaluation Summary}
 %\label{sec:evaluation-summary}
 %
 %The experiment met its three scoped objectives. A privileged monitor Pod

@@ -1,7 +1,7 @@
 \chapter{Requirements and System Design}
 \label{ch:requirements-system-design}
 
-Chapter~2 introduced the kernel mechanisms on which the monitoring system is
+Chapter \ref{ch:ebpf-architecture} introduced the kernel mechanisms on which the monitoring system is
 built. This chapter turns those foundations into concrete requirements and an
 overall system design. Particular attention is given to the constraints of the
 target environment and to the boundary between kernel-space collection and
@@ -12,8 +12,8 @@ place in user space, where it can change without adding verifier-sensitive
 logic to every eBPF program. A shared event contract links the two sides.
 Policies use the resulting events to define the monitored scope, and detectors
 look for configured conditions in individual observations or short ordered
-sequences. This chapter describes those choices as architecture; Chapters~4
-and~5 cover their kernel- and user-space implementations, and Chapter~6
+sequences. This chapter describes those choices as architecture; Chapters \ref{ch:kernel-space-implementation}
+and \ref{ch:user-space-implementation} cover their kernel- and user-space implementations, and Chapter \ref{ch:experimental-evaluation}
 evaluates the resulting system.
 
 \section{Design Goals and Constraints}
@@ -678,5 +678,4 @@ consumption under the selected profiles.
 
 Alert aggregation across hosts and the addition of external deployment context
 are left to a wider platform and are neither implemented nor evaluated here.
-The system considered in this thesis ends at node-local, evidence-preserving
-detection.
+The system considered in this thesis ends at node-local.

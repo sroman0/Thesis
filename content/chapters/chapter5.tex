@@ -525,55 +525,90 @@ The key is neither the complete collective sequence nor a durable causal
 identity. The deduplication map also has no independent capacity limit.
 
 \section{Output and Structured Logging}
-\label{sec:implementation-output-logging}
+  \label{sec:implementation-output-logging}
 
-The output package formats the decoded model; it does not normalise it again.
-Events become \gls{json} or compact text, while alerts add detector identity,
-severity, ordered evidence and optional threat metadata. \gls{json} preserves typed
-values and can add readable labels; compact text supports interactive use.
+  The output layer formats decoded events and detector alerts as JSON or compact
+  text. JSON output writes one object per line, preserving typed argument values
+  and adding readable labels where available. Compact text provides a shorter
+  representation for terminal use.
 
-Events and alerts both use standard output but have independent format settings,
-so one run can produce a mixed stream. \texttt{alerts-only} suppresses event
-presentation without disabling detection. Point alerts contain one source
-event; collective alerts preserve ordered evidence in \gls{json} and a bounded
-sequence in compact text.
+  The following examples were collected during a controlled invocation of
+  \texttt{cat /etc/passwd}. They show an event, an alert and an operational
+  diagnostic from the same monitoring session. The JSON has been indented for
+  readability; fields omitted from the event and alert extracts are described below.
 
-Zap writes operational diagnostics to standard error in console or \gls{json} form
-at debug, info, warn or error level \cite{uber_zap}. These include lifecycle and
-selected libbpf messages, perf-buffer losses, and decoder, detector or output
-failures. Zap never serialises monitored events or alerts, keeping
-infrastructure conditions outside the security data stream.
+  Listing~\ref{lst:output-event-example} retains the event name, selected process
+  fields and three arguments. The numeric operation value has the label
+  \texttt{openat}, while the returned descriptor has the label \texttt{fd:3}.
+  The positive return value confirms successful opening.
 
-\begin{table}[H]
-    \centering
-    \small
-    \renewcommand{\arraystretch}{1.16}
-    \begin{tabularx}{\textwidth}{@{}p{0.22\textwidth}p{0.22\textwidth}p{0.16\textwidth}X@{}}
-        \toprule
-        \textbf{Class} & \textbf{Source model} & \textbf{Channel} &
-        \textbf{Failure behaviour} \\
-        \midrule
-        Normalised event & bufferdecoder.Event through a printer &
-        stdout & A write failure is diagnosed; subsequent events continue. \\
-        Detector alert & Detector alert with one event or ordered evidence &
-        stdout & A rendering failure is diagnosed; it does not change detector
-        state. \\
-        Operational diagnostic & Runtime, decoder, detector, output or libbpf
-        condition & stderr through Zap & Record-local conditions are logged
-        without becoming security events. \\
-        Fatal bootstrap or lifecycle error & Command, definition loading or
-        runtime setup return value & stderr through the command path & Startup
-        or shutdown reports an error; cleanup errors are joined where available.
-        \\
-        \bottomrule
-    \end{tabularx}
-    \caption{User-space output and diagnostic boundaries.}
-    \label{tab:output-boundaries}
-\end{table}
+  \begin{lstlisting}[language={},
+      caption={Selected fields from the recorded file-opening event.},
+      label={lst:output-event-example}]
+  {
+    "event_name": "open",
+    "process": {"pid": 3951999, "uid": 1000, "comm": "cat"},
+    "args": [
+      {"name": "operation", "type": 1, "value": 2, "label": "openat"},
+      {"name": "pathname", "type": 11, "value": "/etc/passwd"},
+      {"name": "returnValue", "type": 3, "value": 3, "label": "fd:3"}
+    ]
+  }
+  \end{lstlisting}
 
-Table~\ref{tab:output-boundaries} summarises channels and failure behaviour.
-Configuration and startup errors return to the command entry point; most
-record-local failures are logged and processing continues.
+  The same invocation triggered the configured sensitive-file detector.
+  Listing~\ref{lst:output-alert-example} retains its identity, severity, evidence
+  count and complete threat metadata. The full alert also contains the source
+  event in an \texttt{events} array, together with descriptive and timing fields.
+  The source was the \texttt{security\_file\_open} observation for
+  \path{/etc/passwd}. This controlled read satisfied the configured rule.
+
+  \begin{lstlisting}[language={},
+      caption={Selected alert fields, including the complete threat block.},
+      label={lst:output-alert-example}]
+  {
+    "type": "alert",
+    "detector_id": "sensitive-file-open",
+    "severity": "medium",
+    "event_count": 1,
+    "threat": {
+      "framework": "MITRE ATT&CK Enterprise",
+      "version": "v19.1",
+      "tactics": [{"id": "TA0007", "name": "Discovery"}],
+      "techniques": [{"id": "T1083", "name": "File and Directory Discovery"}],
+      "data_sources": ["File"],
+      "data_components": ["File Access"]
+    }
+  }
+  \end{lstlisting}
+
+  Events and alerts are written to standard output with independently configured
+  formats. The \texttt{alerts-only} option suppresses event presentation while
+  keeping detection and alert output active. Alert evidence uses the same JSON
+  event representation as ordinary event output.
+
+  Operational diagnostics are written to standard error through Zap, in console
+  or JSON format \cite{uber_zap}. Listing~\ref{lst:output-diagnostic-example}
+  shows a complete configuration message. Its fields report the detector
+  catalogue prepared for the run.
+
+  \begin{lstlisting}[language={},
+      caption={Recorded diagnostic describing detector configuration.},
+      label={lst:output-diagnostic-example}]
+  {
+    "level": "info",
+    "ts": "2026-09-09T14:07:42.895Z",
+    "msg": "detector layer configured",
+    "paths": 1,
+    "available_detectors": 1,
+    "loaded_detectors": 1,
+    "policy_selection": false
+  }
+  \end{lstlisting}
+
+  Diagnostics also report setup failures, perf-buffer loss notifications and
+  decoding, detector or output errors. During monitoring, record-local failures are logged
+  and processing continues with subsequent events.
 
 %\section{User-Space Implementation Summary}
 %\label{sec:user-space-implementation-summary}
