@@ -1,26 +1,25 @@
-\begin{figure}[ht]
+\begin{center}
     \centering
-    \renewcommand{\arraystretch}{1.2}
-
-    \begin{tabular}{ccc}
-        \flowbox{Process lifecycle\\and executable transitions} &
-        \flowbox{Identity, credentials\\and process control} &
-        \flowbox{File and filesystem\\security} \\
-        \flowbox{Memory, namespaces\\and cgroups} &
-        \flowbox{Modules, eBPF and\\kernel interfaces} &
-        \flowbox{Shared helpers\\and UID filter}
+    \setlength{\fboxsep}{5pt}
+    \begin{tabular}{c}
+        \fbox{\parbox[c][0.72cm][c]{0.86\textwidth}{\centering
+            \textbf{Kernel observation points}\\
+            System calls, tracepoints, kernel functions and LSM hooks}} \\[0.2em]
+        $\downarrow$ \\[-0.05em]
+        \fbox{\parbox[c][0.72cm][c]{0.86\textwidth}{\centering
+            \textbf{Shared eBPF collection}\\
+            Direct and paired producers, UID admission and indexed serialisation}} \\[0.2em]
+        $\downarrow$ \\[-0.05em]
+        \fbox{\parbox[c][0.58cm][c]{0.86\textwidth}{\centering
+            Populated binary record through per-CPU perf-event transport}} \\[0.2em]
+        $\downarrow$ \\[-0.05em]
+        \fbox{\parbox[c][0.72cm][c]{0.86\textwidth}{\centering
+            \textbf{Go processing pipeline}\\
+            Schema decoding, policy admission and point or collective detection}} \\[0.2em]
+        $\downarrow$ \\[-0.05em]
+        \fbox{\parbox[c][0.58cm][c]{0.86\textwidth}{\centering
+            Normalised events, evidence-preserving alerts and separate diagnostics}}
     \end{tabular}
-
-    \vspace{0.55em}
-    \textbf{indexed binary record and perf-event transport}
-    \vspace{0.55em}
-
-    \begin{tabular}{ccc}
-        \flowbox{Go decoder\\and event registry} &
-        \flowbox{Policies and point or\\collective detectors} &
-        \flowbox{Events, alerts and\\separate diagnostics}
-    \end{tabular}
-
-    \caption{Host-level hook families and their shared path to user-space analysis.}
-    \label{fig:summary-host-hook-families}
-\end{figure}
+    \par\vspace{0.35em}
+    Figure 1: End-to-end path from kernel observation to user-space results.
+\end{center}
