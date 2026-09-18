@@ -1,20 +1,12 @@
 \chapter{Conclusions and Future Work}
 \label{ch:conclusions-future-work}
 
-This thesis achieved its stated objective by producing and evaluating a
-node-local runtime security monitoring prototype for the selected Rocky Linux
-environment. The implemented pipeline connects bounded kernel observations to 
-evidence and deterministic local detection. Its scope is defined by the
-implemented event domain and by the controlled evaluation presented in
-Chapter~\ref{ch:experimental-evaluation}.
-
 \section{Summary of the Work}
 \label{sec:conclusions-summary-work}
 
 The central problem was the collection of heterogeneous process and
-security-related kernel observations while keeping their interpretation outside
-the collection layer. The resulting architecture assigns constrained data
-extraction and optional early admission to \gls{ebpf}. The Go runtime handles
+security-related kernel observations. The resulting architecture assigns constrained data
+extraction to \gls{ebpf}. The Go runtime handles
 record normalisation, monitoring scope, detection and presentation. A shared
 event contract allows observations produced by different physical hooks to
 enter the same logical event model.
@@ -26,7 +18,7 @@ construction framework. Selective probe planning activates the producers and
 support programs required by the chosen logical events. Exact \gls{uid}
 admission can reject observations before full enrichment and transport when a
 suitable fixed identity is available. CO-RE, explicit layout branches and
-verifier-visible bounds adapt these mechanisms to the verified Rocky Linux
+verifier-visible bounds adapt these mechanisms to the verifier of the Rocky Linux
 kernel; the compatibility claim remains tied to that target.
 
 In user space, schema-directed decoding converts perf-buffer records into a

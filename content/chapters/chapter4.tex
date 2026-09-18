@@ -75,9 +75,7 @@ entry and completes the event when a return hook supplies the result.
 
 Physical hooks and public events are not in one-to-one correspondence. Several
 programs may produce one logical schema, while support programs can be attached
-without emitting public events. Section~\ref{sec:implementation-loader-registry}
-explains how the loader turns these relationships into an attachment plan.
-
+without emitting public events.
 
 \subsection{Shared Event-Construction Framework}
 \label{subsec:implementation-shared-event-construction}
@@ -218,8 +216,38 @@ or error.
 The \texttt{sched\_process\_fork} tracepoint runs after the child task exists and
 receives both task structures. It records the host \gls{pid} and \gls{tid} of
 parent and child, together with the child's start time. The corresponding
-source excerpt is retained in
-Listing~\ref{lst:appendix-sched-process-fork} of Appendix~\ref{appendix_a}.
+source excerpt is retained in Listing~\ref{lst:sched-process-fork}.
+
+\begin{lstlisting}[
+    language=C,
+    basicstyle=\ttfamily\scriptsize,
+    caption={Parent-child identity collected by
+    \texttt{sched\_process\_fork}.},
+    label={lst:sched-process-fork}
+]
+struct task_struct *parent =
+    (struct task_struct *) ctx->args[0];
+struct task_struct *child =
+    (struct task_struct *) ctx->args[1];
+
+u32 parent_pid = get_task_host_tgid(parent);
+u32 parent_tid = get_task_host_pid(parent);
+u32 child_pid = get_task_host_tgid(child);
+u32 child_tid = get_task_host_pid(child);
+u64 child_start = get_task_start_time(child);
+
+save_to_submit_buf(&p.event->args_buf,
+                   &parent_pid, sizeof(u32), 0);
+save_to_submit_buf(&p.event->args_buf,
+                   &parent_tid, sizeof(u32), 1);
+save_to_submit_buf(&p.event->args_buf,
+                   &child_pid, sizeof(u32), 2);
+save_to_submit_buf(&p.event->args_buf,
+                   &child_tid, sizeof(u32), 3);
+save_to_submit_buf(&p.event->args_buf,
+                   &child_start, sizeof(u64), 4);
+\end{lstlisting}
+
 
 Because PIDs and TIDs can be reused, the start time lets user space distinguish
 separate task lifetimes with the same numeric identifier. The same combination
@@ -256,20 +284,23 @@ the request, binary security processing and final result.
     \label{fig:execution-monitoring}
 \end{figure}
 
-Figure~\ref{fig:execution-monitoring} shows coverage, not a guaranteed
-one-to-one sequence. Binary handlers and interpreters may trigger the security
-hooks more than once, and those hooks do not expose the final decision.
+Figure~\ref{fig:execution-monitoring} shows the events used at each stage of the execution process. 
+These events do not always form a one-to-one sequence. Binary handlers and
+interpreters may invoke the security hooks several times during one execution
+request. Moreover, the security hooks describe intermediate processing and do
+not report whether execution ultimately succeeded.
 
-The \texttt{execve} and \texttt{execveat} events preserve the requested pathname
-and up to 38 argument strings while the user-space memory is still available.
+The \texttt{execve} and \texttt{execveat} events describe the execution
+requested by a process. They record the pathname and up to 38 argument strings,
+allowing an analyst to identify the requested program and command line.
 \texttt{execveat} also records the directory file descriptor and flags needed
 to interpret relative or descriptor-based execution. As entry events, neither
 contains a result.
 
-\texttt{security\_bprm\_check} runs after the kernel has constructed
-\texttt{linux\_binprm}. The event records the resolved pathname, device, inode,
-original filename, argument count and environment count, tying the request to a
-resolved kernel object.
+The \texttt{security\_bprm\_check} event identifies the executable file that
+the kernel resolved and submitted to its binary security checks. 
+The event records the resolved pathname, device, inode, original filename, 
+argument count and environment count, tying the request to a resolved kernel object.
 
 \texttt{security\_bprm\_creds\_for\_exec} observes credential preparation. It
 captures the same binary identity and adds the file change time. Prepared
@@ -282,20 +313,51 @@ its resolved filename. A failed \texttt{execve} or \texttt{execveat} produces
 \texttt{process\_execute\_failed}, retaining the operation variant, directory
 file descriptor, requested pathname, flags and negative return value.
 
-The failure event uses paired entry and exit programs because the pathname and
-execution options are available before the syscall runs, while the error is
-available only when it returns. The return-side implementation is shown in
-Listing~\ref{lst:appendix-process-execute-failed} of
-Appendix~\ref{appendix_a}.
+The failure event requires an entry and an exit program. The entry program
+temporarily stores the request data because it is available before the syscall
+runs. The exit program retrieves this data and combines it with the return
+value. Listing~\ref{lst:process-execute-failed} shows the exit-side logic.
 
-The return program removes saved state before testing the result. Success only
-clears the temporary entry; a negative value is serialised with the original
-request. Separate entry and exit programs cover \texttt{execve} and
-\texttt{execveat}, but all four use one public schema.
+\begin{lstlisting}[
+    language=C,
+    basicstyle=\ttfamily\scriptsize,
+    caption={Return-side emission of failed executable transitions.},
+    label={lst:process-execute-failed}
+]
+args_t args = {};
+if (load_args(&args, PROCESS_EXECUTE_FAILED) != 0)
+    return 0;
+del_args(PROCESS_EXECUTE_FAILED);
 
-Caller intent, resolved binary identity and outcome remain separate. An attempt
-is not mistaken for a completed transition, and user space can translate
-negative return values into readable errors.
+if (ret >= 0)
+    return 0;
+
+program_data_t p = {};
+if (!init_program_data(&p, ctx, PROCESS_EXECUTE_FAILED))
+    return 0;
+
+int operation = (int) args.args[0];
+int dirfd = (int) args.args[1];
+const char *pathname = (const char *) args.args[2];
+int flags = (int) args.args[3];
+
+save_to_submit_buf(&p.event->args_buf,
+                   &operation, sizeof(int), 0);
+save_to_submit_buf(&p.event->args_buf,
+                   &dirfd, sizeof(int), 1);
+if (pathname)
+    save_str_to_buf(&p.event->args_buf, (void *) pathname, 2);
+save_to_submit_buf(&p.event->args_buf,
+                   &flags, sizeof(int), 3);
+save_to_submit_buf(&p.event->args_buf,
+                   &ret, sizeof(long), 4);
+return events_perf_submit(&p);
+\end{lstlisting}
+
+The exit program first removes the temporary state. A successful syscall
+produces no failure event, while a negative return value is submitted together
+with the saved request. The implementations for \texttt{execve} and
+\texttt{execveat} use the same public event schema.
 
 \subsection{Identity, Credentials, Process Control and Limits}
 \label{subsec:implementation-identity-control-hooks}
@@ -375,7 +437,7 @@ used by the monitor. The two snapshots are compared before submission. Listing
     language=C,
     basicstyle=\ttfamily\footnotesize,
     caption={Kernel-side suppression of unchanged credential snapshots
-    (abridged).},
+    .},
     label={lst:commit-creds-filter}
 ]
 slim_cred_t old_slim = {};
@@ -417,34 +479,35 @@ privilege-related activity to one event type.
 \subsubsection{Process Control and Limits}
 \label{subsubsec:implementation-process-control-limits}
 
-Process-control operations can inspect another task, change current-process
-behaviour or alter resource limits. The implementation selects the boundary at
-which each operation exposes useful evidence.
+These events monitor how processes inspect or control other processes,
+handle signals and manage resource limits. Security hooks record requests
+while the kernel checks them; paired syscall probes also collect the
+returned result \cite{linux_lsm_development}.
 
-Cross-process control is represented by \texttt{ptrace} and
-\texttt{security\_task\_kill}. The \texttt{ptrace} entry program retains the
-request code, target \gls{pid} and the address and data arguments supplied by the
-caller. The pointer values remain opaque; the eBPF program does not copy their
-referenced memory. At exit, the return value is joined with the request so that
-user space can distinguish acceptance from an error.
+The \texttt{ptrace} event monitors requests to inspect or control another
+process, such as reading its memory or registers and controlling its
+execution. These operations support debugging but can also expose or alter
+another process's state. The event records the request code, target PID,
+address and data arguments, together with the syscall return value.
+Arguments are retained as raw values; referenced memory is not copied.
 
-Signal delivery is observed through \texttt{security\_task\_kill}. The common
-event context already identifies the source task, while the event-specific
-payload describes the destination through its host \gls{pid} and \gls{tid}, \gls{uid} and command
-name. The signal number completes the source--operation--target relation.
-Signal zero is retained because it can be used to test whether a target exists
-and whether the caller has permission to signal it, even though no signal is
-actually delivered.
+The \texttt{security\_task\_kill} event monitors permission checks for
+sending signals to a target task. Signals can request termination, stop
+execution or notify a process of an event. The common context identifies
+the calling task, while the payload records the signal and the target's
+host PID, TID, real UID and command name. Signal zero is also recorded:
+it checks existence and permission without delivering a signal.
 
-Listing~\ref{lst:security-task-kill-relation} shows how the destination identity
-is extracted from the target task rather than inferred from a caller-supplied
-numeric \gls{pid}.
+Listing~\ref{lst:security-task-kill-relation} shows how the monitor reads
+the target's identity directly from the task selected by the kernel.
+This gives the analyst a command name and user identity alongside the
+numeric process identifiers.
 
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\footnotesize,
     caption={Target evidence collected by
-    \texttt{security\_task\_kill} (abridged).},
+    \texttt{security\_task\_kill} .},
     label={lst:security-task-kill-relation}
 ]
 u32 target_pid = get_task_host_tgid(target);
@@ -473,42 +536,40 @@ save_to_submit_buf(&p.event->args_buf,
                    &sig, sizeof(int), 4);
 \end{lstlisting}
 
-Reading the destination task structure provides more context than a numeric PID
-supplied by the caller. The hook still runs during mediation: it records the
-attempted relation, not the final decision or confirmed signal delivery.
+The record shows which task was targeted and which signal was requested.
+Because collection occurs before the security check returns, it does not
+confirm permission, delivery or the target's response.
 
-Changes to the current task's behaviour are monitored through
-\texttt{security\_task\_prctl} and \texttt{do\_sigaction}. The former records
-the requested \texttt{prctl} option and its four machine-word arguments. The
-eBPF program intentionally leaves option-specific interpretation to user space,
-avoiding a large command-dependent parser in kernel space.
+The \texttt{security\_task\_prctl} event observes requests made through
+\texttt{prctl} to query or change process settings, such as its name or
+restrictions on gaining privileges. It records the option and four
+arguments. Their meaning depends on the option and is left to user space;
+the event does not report whether the request succeeded.
 
-The \texttt{do\_sigaction} event focuses on signal-handler state.
-It records the signal number, whether a new action was supplied and whether the
-caller requested the previous action. For both the proposed and currently
-installed actions, it captures the flags, first signal-mask word and handler
-category or address. This makes changes such as installing, replacing or
-ignoring a handler observable. Since the hook is attached at function entry,
-the event does not confirm that the proposed action was installed.
+The \texttt{do\_sigaction} event monitors queries and proposed changes to
+signal handling. A process may install a handler, ignore a signal or
+restore its default action. The event records the signal, whether a new
+action was supplied and whether the previous action was requested. It
+also captures the current and proposed handler settings, including flags
+and the first signal-mask word. Collection occurs at function entry,
+so a proposed change is not necessarily applied.
 
-Resource-limit monitoring combines mediation with a syscall outcome. \\
-\texttt{security\_task\_setrlimit} receives the resolved
-target task and proposed kernel \texttt{rlimit} structure. It records the target
-host \gls{pid}, resource identifier, soft limit and hard limit while the operation is
-being checked. It does not include the final decision.
+Resource limits control quantities such as CPU time, address-space size
+and the number of open file descriptors.
+\texttt{security\_task\_setrlimit} records proposed changes: the target's
+host PID, resource type, soft limit and hard limit. The soft limit is
+the enforced threshold; the hard limit restricts how far an unprivileged
+process can raise it. This event does not contain the final decision.
 
-The paired \texttt{prlimit64} event preserves the target \gls{pid}, resource
-identifier, addresses of the new and old user-space limit structures, and the
-syscall return value. The pointed-to structures are not dereferenced by this
-event. The security hook exposes proposed kernel values; the syscall event
-preserves the request interface and reported outcome.
+The \texttt{prlimit64} event complements this view by recording requests
+to read or change resource limits and their syscall result. It retains
+the target PID, resource type and addresses of the new and old limit
+structures.
 
-\texttt{security\_settime64} observes attempts to modify the system
-clock. It records the proposed seconds and nanoseconds together with the
-timezone offset and daylight-saving field. Wall-clock changes are privileged
-and can disrupt timestamp analysis or time-based authentication. As a
-mediation-stage record, however, the event does not show that the proposed time
-was installed.
+Finally, \texttt{security\_settime64} monitors requests to change the
+system clock or timezone. It records the supplied time and timezone
+fields. These observations can help investigate clock changes that affect
+log timestamps, but do not confirm that the requested change took effect.
 
 \subsection{File and Filesystem Security}
 \label{subsec:implementation-filesystem-hooks}
@@ -964,43 +1025,31 @@ limited to kernel-side admission.
 \section{Compatibility and Verifier Challenges}
 \label{sec:implementation-compatibility-verifier}
 
-CO-RE adapts field access when compatible BTF is available, but some kernel
-differences still need explicit branches. The shared helpers cover alternative
-task identifiers and start times, capability layouts and inode change times.
-Cgroup identification includes the internal layout used by the \gls{rhel} 8
-kernel family. CO-RE selects branches whose fields exist on the target.
+Running the collector on Rocky Linux 8.10 required changes to how it reads
+kernel data and checks buffer boundaries. CO-RE adjusts field accesses using
+the target kernel's BTF information, but some differences require explicit
+alternatives in the code \cite{linux_btf,linux_libbpf_overview}. The shared
+helpers handle these differences when reading process identifiers, start
+times, capabilities and inode timestamps. Cgroup identification also accounts
+for the internal layout used by the RHEL 8 kernel family.
 
-Other paths depend on helper availability. Syscall registers use BTF-aware task
-helpers when available; otherwise, an x86-64 fallback derives the frame from
-the task stack using the target's expected page and stack dimensions.
-Compatible 32-bit processes have their syscall numbers translated before event
-classification. A bounded red-black-tree \gls{vma} lookup is retained for older
-kernels, but the memory hooks in
-Section~\ref{subsec:implementation-memory-namespace-hooks} do not call it.
+Helper availability affects how syscall registers are read. The code uses
+BTF-aware task helpers when available; otherwise, an x86-64 fallback locates
+the registers in the task's kernel stack using the target's stack dimensions.
+For compatible 32-bit processes, syscall numbers are translated before event
+classification.
 
-Verifier constraints also shape the code. Path reconstruction, string arrays
-and \gls{vma} traversal use fixed loop bounds. Buffer writes and submitted sizes
-repeat checks in forms accepted by the target verifier. The shared syscall-exit
-path limits the return-argument index to values below 16 because the broader
-bound was rejected on Rocky Linux. Selected memory syscalls use typed
-tracepoints instead of the more complex generic dispatcher for the same reason.
+The verifier must be able to establish that memory accesses stay within
+valid bounds \cite{linux2026ebpfverifier}. Path reconstruction and argument
+collection therefore use fixed loop limits, while buffer writes and event
+submission include explicit size checks. Some checks needed further changes
+to pass verification on the target. The shared syscall-exit path restricts
+the return-argument index to values below 16, and selected memory syscalls
+use dedicated tracepoints because the generic dispatcher was rejected.
 
-These branches let one object handle compatible layouts on the verified target;
-they cannot provide missing symbols, hooks, helpers or attachment mechanisms.
-The portability claim remains limited to the identified Rocky Linux
-environment, in line with Section~\ref{subsec:ebpf-btf-core}.
+These adaptations were tested on the selected Rocky Linux kernel.
+Compatibility with other kernels still requires checking the available hooks,
+helpers and attachment mechanisms, as explained in
+Section~\ref{subsec:ebpf-btf-core}.
 
 
-\section{Kernel-Space Implementation Summary}
-\label{sec:kernel-space-implementation-summary}
-
-Direct, paired and lifecycle producers share one bounded construction
-framework. Their records keep requests, security mediation, committed
-transitions and returned outcomes distinct. Indexed arguments allow unavailable
-fields to be omitted without changing schema identity, and the completed record
-crosses the perf buffer after optional exact \gls{uid} admission.
-
-The object is tailored to the verified Rocky Linux target. CO-RE handles
-compatible layout differences; explicit branches and verifier-visible bounds
-cover older and vendor-specific details. Chapter~5 continues from the point at
-which user space selects, loads and consumes these producers.
