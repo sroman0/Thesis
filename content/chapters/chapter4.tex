@@ -207,9 +207,9 @@ entry probes do not retain any arguments. A positive result identifies the
 child returned to the caller, while a negative result records the reported
 error.
 
-The \texttt{clone} event captures the more configurable creation interface. Its
-entry probe retains the clone flags, stack address, parent and child thread-ID
-pointers and thread-local-storage value. These fields describe resource sharing
+The \texttt{clone} event monitors task creation, including new threads
+that share resources with the caller. The recorded flags describe
+which resources are shared, such as memory and file descriptors. These fields describe resource sharing
 and execution-context setup. The exit probe adds the returned child identifier
 or error.
 
@@ -302,9 +302,9 @@ the kernel resolved and submitted to its binary security checks.
 The event records the resolved pathname, device, inode, original filename, 
 argument count and environment count, tying the request to a resolved kernel object.
 
-\texttt{security\_bprm\_creds\_for\_exec} observes credential preparation. It
-captures the same binary identity and adds the file change time. Prepared
-credentials are not necessarily installed; committed transitions are covered
+\texttt{security\_bprm\_creds\_for\_exec} observes credential preparation for program execution, 
+which may change privileges. It captures the same binary identity and adds the file change time. 
+Prepared credentials are not necessarily installed; committed transitions are covered
 in Section~\ref{subsubsec:implementation-identity-credentials}.
 
 Two mutually exclusive events represent the outcome.
@@ -694,13 +694,15 @@ source must be serialised before destination reconstruction overwrites it.
 Creation-related hooks retain evidence specific to the new directory entry.
 \texttt{security\_inode\_symlink} records the pathname of the symbolic link and
 the caller-supplied target string, which may be relative or may not yet identify
-an existing object. \texttt{security\_inode\_mknod} records the pathname,
+an existing object. The \texttt{security\_inode\_mknod} event observes requests to create
+filesystem nodes, including device nodes through which processes can
+access character or block devices. It records the pathname,
 requested mode and device number of a new special node. The mode identifies the
 object type and permission bits, while the device number is meaningful for
 character and block devices. Both events observe security mediation and do not
 contain a final syscall result.
 
-Mount hooks extend monitoring from individual objects to filesystem topology.
+Mount hooks extend monitoring from individual objects to filesystem mounting and unmounting operations.
 \texttt{security\_sb\_mount} records the source name, resolved target path,
 filesystem type and mount flags. The filesystem-specific data argument is not
 copied because its format varies between filesystems and may contain sensitive
@@ -787,8 +789,9 @@ The program reads the supplied virtual memory area directly instead of
 searching the process memory-management tree again. This keeps collection
 bounded and avoids repeating work already done by the kernel.
 
-Cross-process memory access is monitored through
-\texttt{process\_vm\_readv} and \texttt{process\_vm\_writev}. These events
+The \texttt{process\_vm\_readv} and \texttt{process\_vm\_writev}
+events monitor requests to read memory from another process or write
+into it. These events 
 record the target \gls{pid}, addresses and element counts of the local and remote
 I/O-vector arrays, operation flags and the number of bytes transferred or the
 returned error. The vector elements and transferred memory contents are not
