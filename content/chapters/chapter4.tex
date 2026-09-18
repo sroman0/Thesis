@@ -139,10 +139,11 @@ Listing~\ref{lst:ebpf-shared-construction} concentrates on the transport
 boundary; Section~\ref{sec:implementation-binary-contract} covers the exact
 bounds.
 
-Paired producers span two invocations. Entry arguments are stored in a map and
-retrieved when the return program adds the result. The key combines the logical
-event with the issuing host thread, preventing different operations on that
-thread from sharing the same slot.
+Paired producers save argument values at entry and retrieve them when the
+return program collects the result. The map key combines the event identifier
+with the calling host thread. Saved values may include user-space pointers:
+storing a pointer does not copy the data it references. If that data is read
+at exit, it may have changed or become unreadable since entry.
 
 \begin{lstlisting}[
       language=C,
@@ -209,8 +210,7 @@ error.
 
 The \texttt{clone} event monitors task creation, including new threads
 that share resources with the caller. The recorded flags describe
-which resources are shared, such as memory and file descriptors. These fields describe resource sharing
-and execution-context setup. The exit probe adds the returned child identifier
+which resources are shared, such as memory and file descriptors. The exit probe adds the returned child identifier
 or error.
 
 The \texttt{sched\_process\_fork} tracepoint runs after the child task exists and
@@ -307,16 +307,21 @@ which may change privileges. It captures the same binary identity and adds the f
 Prepared credentials are not necessarily installed; committed transitions are covered
 in Section~\ref{subsubsec:implementation-identity-credentials}.
 
-Two mutually exclusive events represent the outcome.
-\texttt{sched\_process\_exec} confirms installation of a new image and records
-its resolved filename. A failed \texttt{execve} or \texttt{execveat} produces
-\texttt{process\_execute\_failed}, retaining the operation variant, directory
-file descriptor, requested pathname, flags and negative return value.
+The \texttt{sched\_process\_exec} event confirms successful execution.
+It records the execution filename and, where available, the resolved path
+and file metadata. It also collects bounded argument and environment data,
+their counts, the real UID and identifiers derived from process and thread
+lifetimes. These fields help identify the executable and how it was started.
 
-The failure event requires an entry and an exit program. The entry program
-temporarily stores the request data because it is available before the syscall
-runs. The exit program retrieves this data and combines it with the return
-value. Listing~\ref{lst:process-execute-failed} shows the exit-side logic.
+The \texttt{process\_execute\_failed} event instead reports a failed
+\texttt{execve} or \texttt{execveat}. It records the operation type,
+directory file descriptor, pathname read at syscall exit, flags and
+negative return value.
+
+The failure event uses paired entry and exit programs. The entry program
+stores the operation, directory file descriptor, flags and pathname pointer.
+The exit program retrieves these values, reads the pathname and adds the
+syscall result. Listing~\ref{lst:process-execute-failed} shows this processing.
 
 \begin{lstlisting}[
     language=C,
@@ -466,15 +471,10 @@ Unchanged snapshots never enter the perf-event channel. When a relevant field
 differs, the event preserves both states, so analysis does not depend on finding
 an earlier credential record.
 
-\texttt{cap\_capable} records the capability number presented during a kernel
-capability check, including checks unrelated to a credential replacement. The
-event does not include the checked credentials, user namespace, option flags or
-final decision, so it cannot by itself establish a privilege change or a
-successful operation.
-
-The resulting records distinguish an identity request, a mediated proposal, an
-installed credential state and a capability check instead of reducing all
-privilege-related activity to one event type.
+The \texttt{cap\_capable} event observes checks for individual Linux
+privileges, called capabilities. The recorded capability identifies
+the privilege being checked, helping the analyst recognise attempts
+to perform privileged operations.
 
 \subsubsection{Process Control and Limits}
 \label{subsubsec:implementation-process-control-limits}
@@ -955,11 +955,11 @@ captured arguments. The Go decoder mirrors the C field order and widths. Only
 the populated prefix is submitted, not the entire 32,000-byte construction
 workspace.
 
-Each argument starts with its one-byte schema index. Fixed-width values follow
-directly; variable-length values add a four-byte length. Strings and argument
-arrays contain bounded sub-records. No wire type tag is needed because the
-index selects the name and decoder from the Go registry. Missing arguments can
-be omitted without renumbering later fields.
+Each argument starts with a one-byte schema index. Fixed-width values follow
+directly, while strings and arrays use lengths and counts specific to their
+encoding. The Go registry associates each index with an argument name and
+decoder, so records do not repeat type information. Arguments can be omitted
+without changing the indices of the remaining fields.
 
 Before writing an argument, the eBPF helper must prove to the verifier that the
 current offset and the complete payload remain inside the buffer.
@@ -1009,16 +1009,16 @@ the transport's capacity and ordering consequences.
 \section{Kernel-Side UID Filtering}
 \label{sec:implementation-selection-filtering}
 
-The shared initialiser can filter on one exact effective \gls{uid}. When enabled,
-it reads the current task's effective \gls{uid} and stops a mismatch before full
-context enrichment and perf-buffer submission. Because the check is in the
-common path, it applies to every producer using the framework from
-Section~\ref{subsec:implementation-shared-event-construction}.
+The shared initialiser can filter on one exact real \gls{uid}. When enabled,
+it compares the current task's real UID with the configured value. A mismatch
+stops collection before argument capture, full context enrichment and
+perf-buffer submission. The check applies to every producer that uses the
+shared initialiser.
 
-The mechanism supports one equality comparison, not ranges, exclusion sets,
-namespace-aware identities or policy expressions. A missing configuration or
-disabled flag admits the event. A rejected observation creates no event or
-authorisation result. Richer selection stays in user space.
+The filter supports a single UID value. It does not support ranges,
+exclusion lists or policy expressions. When disabled, it imposes no UID
+restriction. If the shared configuration cannot be retrieved, the program
+emits no event. More detailed selection is performed in user space.
 
 Before processing begins, the Go runtime writes the enable flag and \gls{uid} to
 fixed fields in the shared configuration map. These fields must remain aligned

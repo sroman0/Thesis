@@ -383,7 +383,7 @@ leave a selected event incomplete; exposing a support probe incorrectly can
 turn an internal mechanism into an apparent public event.
 
 An optional exact \gls{uid} guard provides a second reduction after a program
-has been invoked. It compares the task's effective \gls{uid} with one configured
+has been invoked. It compares the task's real \gls{uid} with one configured
 value and rejects a mismatch before full context enrichment, serialisation and
 transport. This avoids work for observations known to be outside that narrow
 scope.
