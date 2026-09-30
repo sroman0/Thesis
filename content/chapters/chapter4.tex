@@ -186,11 +186,7 @@ state left behind by a missed return. This map is temporary construction state,
 not a process history.
 
 The hook families below reuse these patterns, but the meaning of a record still
-depends on its observation point. Syscall entry captures a request. A security
-hook exposes an operation under mediation, usually without the final decision.
-A committed-state hook sees installed state, and a lifecycle tracepoint reports
-a completed transition. Exit or return probes add the result visible at that
-boundary.
+depends on its observation point.
 
 \subsection{Process Lifecycle and Executable Transitions}
 \label{subsec:implementation-process-execution-hooks}
@@ -441,8 +437,7 @@ used by the monitor. The two snapshots are compared before submission. Listing
 \begin{lstlisting}[
     language=C,
     basicstyle=\ttfamily\footnotesize,
-    caption={Kernel-side suppression of unchanged credential snapshots
-    .},
+    caption={Kernel-side suppression of unchanged credential snapshots.},
     label={lst:commit-creds-filter}
 ]
 slim_cred_t old_slim = {};
@@ -507,7 +502,7 @@ numeric process identifiers.
     language=C,
     basicstyle=\ttfamily\footnotesize,
     caption={Target evidence collected by
-    \texttt{security\_task\_kill} .},
+    \texttt{security\_task\_kill}.},
     label={lst:security-task-kill-relation}
 ]
 u32 target_pid = get_task_host_tgid(target);
@@ -887,8 +882,7 @@ enforcement programs and do not change the decision.
 The \texttt{security\_bpf} hook monitors operations entering the security path
 of the \texttt{\gls{bpf}} syscall. Its purpose is to expose requests such as map
 creation, program loading and program attachment. The event records the \gls{bpf}
-command and attribute size, but does not copy \texttt{union \gls{bpf}\_attr}, whose
-active fields depend on the command.
+command and attribute size.
 
 The \texttt{security\_bpf\_map} hook observes security checks involving an
 existing eBPF map. Since maps retain state and exchange data between kernel
@@ -901,12 +895,8 @@ existing eBPF program. It records the program identifier, name and type,
 allowing programs intended for kprobes, tracepoints, cgroups and other
 execution contexts to be distinguished.
 
-These hooks expose the requested \gls{bpf} operation and the map or program
-under security mediation.
-
 Further events cover kernel-facing activity that ordinary process syscalls may
-not reveal: dynamic tracing, symbol lookup, procfs creation, kernel-initiated
-execution and kernel file consumption.
+not reveal.
 
 The \texttt{register\_kprobe} event monitors attempts to install dynamic
 kprobes. It records the target symbol, pre- and post-handler addresses, and
@@ -936,24 +926,12 @@ before the kernel consumes a file. It records the resolved pathname, device,
 inode, change time and read purpose, distinguishing uses such as modules,
 firmware, policy data and kexec images.
 
-The later \texttt{security\_kernel\_post\_read\_file} event records the same
-file identity and purpose together with the supplied byte size. This size is
-not a return value. The two stages are emitted independently: the
-implementation does not correlate them automatically, copy file contents or
-compute a digest.
-
-The resulting coverage does not inspect handler code, reconstruct every kernel
-relationship, prove integrity or enforce a decision. Chapter~5 explains how
-these logical events activate their producers and support dependencies.
-
 \section{Binary Event Contract and Kernel Transport}
 \label{sec:implementation-binary-contract}
 
 Every event uses the same binary format. A 136-byte context holds common
 process, host and event metadata, followed by a one-byte argument count and the
-captured arguments. The Go decoder mirrors the C field order and widths. Only
-the populated prefix is submitted, not the entire 32,000-byte construction
-workspace.
+captured arguments. The Go decoder mirrors the C field order and widths.
 
 Each argument starts with a one-byte schema index. Fixed-width values follow
 directly, while strings and arrays use lengths and counts specific to their
@@ -999,12 +977,8 @@ It sends the record through
 \texttt{\gls{bpf}\_perf\_event\_output} to the perf-event buffer associated with the
 current CPU. The Go runtime consumes these per-CPU buffers through a libbpfgo
 perf reader; the current implementation does not retain a \gls{bpf} ring-buffer
-transport path.
-
-The reader's loss channel reports records dropped by a full per-CPU buffer;
-malformed records that arrive are reported by the decoder. These remain
-separate conditions. Section~\ref{subsec:perf-buffer-failure-boundaries} covers
-the transport's capacity and ordering consequences.
+transport path. Perf buffer was chosen because it gives each CPU its own recording capacity: a burst of
+events on one CPU cannot consume the buffer space reserved for the others.
 
 \section{Kernel-Side UID Filtering}
 \label{sec:implementation-selection-filtering}
@@ -1028,31 +1002,32 @@ limited to kernel-side admission.
 \section{Compatibility and Verifier Challenges}
 \label{sec:implementation-compatibility-verifier}
 
-Running the collector on Rocky Linux 8.10 required changes to how it reads
-kernel data and checks buffer boundaries. CO-RE adjusts field accesses using
-the target kernel's BTF information, but some differences require explicit
-alternatives in the code \cite{linux_btf,linux_libbpf_overview}. The shared
-helpers handle these differences when reading process identifiers, start
-times, capabilities and inode timestamps. Cgroup identification also accounts
-for the internal layout used by the RHEL 8 kernel family.
+The collector needed several adaptations to run on Rocky Linux 8.10.
+Kernel versions can store the same information in different ways.
+CO-RE uses BTF information to adjust field accesses, but some differences
+still require separate code paths \cite{linux_btf,linux_libbpf_overview}.
+The shared helpers provide these alternatives for process identifiers,
+start times, capabilities, inode timestamps and cgroup identifiers.
 
-Helper availability affects how syscall registers are read. The code uses
-BTF-aware task helpers when available; otherwise, an x86-64 fallback locates
-the registers in the task's kernel stack using the target's stack dimensions.
-For compatible 32-bit processes, syscall numbers are translated before event
-classification.
+Reading syscall arguments also depends on the functions available in
+the kernel. The collector uses a helper to locate the saved registers
+when possible. Otherwise, it locates them in the task's kernel stack
+using the layout expected on the target x86-64 system. For 32-bit
+processes, it translates syscall numbers so that the same operation
+can be recognised across both interfaces.
 
-The verifier must be able to establish that memory accesses stay within
-valid bounds \cite{linux2026ebpfverifier}. Path reconstruction and argument
-collection therefore use fixed loop limits, while buffer writes and event
-submission include explicit size checks. Some checks needed further changes
-to pass verification on the target. The shared syscall-exit path restricts
-the return-argument index to values below 16, and selected memory syscalls
-use dedicated tracepoints because the generic dispatcher was rejected.
+The verifier checks that each eBPF program accesses memory within valid
+bounds before allowing it to run \cite{linux2026ebpfverifier}. The
+collector therefore limits how many path components and arguments it
+reads, and checks the available buffer space before writing data.
+Some code also had to be simplified to pass verification on the target.
+The shared syscall-exit code uses a stricter bound on the field index
+used to store the return value. Selected memory syscalls use dedicated
+tracepoints because the verifier rejected the generic dispatcher.
 
-These adaptations were tested on the selected Rocky Linux kernel.
-Compatibility with other kernels still requires checking the available hooks,
-helpers and attachment mechanisms, as explained in
-Section~\ref{subsec:ebpf-btf-core}.
+These changes were tested on the selected Rocky Linux kernel. Running
+the collector on another kernel requires checking that the necessary
+hooks and helpers are available and that its verifier accepts the
+programs, as discussed in Section~\ref{subsec:ebpf-btf-core}.
 
 

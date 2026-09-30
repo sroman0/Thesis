@@ -34,7 +34,7 @@ Listing~\ref{lst:cobra-runtime-handoff} shows this handoff.
   \begin{lstlisting}[
       language=Go,
       caption={Validated handoff from the Cobra command to the runtime
-      (abridged).},
+     .},
       label={lst:cobra-runtime-handoff}
   ]
   if err := ValidateConfig(&cliCfg); err != nil {
@@ -90,7 +90,7 @@ Listing~\ref{lst:probe-plan} shows this dependency expansion.
 
   \begin{lstlisting}[
       language=Go,
-      caption={Selection of producer and support probes (abridged).},
+      caption={Selection of producer and support probes.},
       label={lst:probe-plan}
   ]
   for _, probe := range supportedProbes {
@@ -143,8 +143,7 @@ variable stream of indexed arguments.
   \end{figure}
 
 The fixed context must be complete before any field is read. Header values are
-decoded from explicit little-endian offsets rather than copied into a Go
-structure, whose compiler-defined padding could differ from the C wire layout.
+decoded from explicit little-endian offsets.
 
 The resulting context includes timing, process and namespace identities,
 command and UTS names, the event identifier, associated syscall and collection
@@ -202,17 +201,37 @@ normalisation step.
 \section{User-Space Event Selection and Admission}
 \label{sec:userspace-event-selection}
 
-After decoding, three short-circuit gates check the logical event set, an
-optional exact command name and the active policies. A policy applies its common
-scope before its rules, and matching suppression overrides monitor or detect
-rules. Without policies, the last gate admits the event.
+After decoding, the runtime applies three filters to decide whether an event
+should be shown to the analyst and evaluated by detectors.
 
-Listing~\ref{lst:event-admission} shows the order and consumer fan-out. Optional
-socket enrichment and diagnostics are omitted.
+The first filter checks whether the event type belongs to the enabled set.
+For example, selecting \texttt{sched\_process\_exec} keeps execution events
+while excluding other event types.
+
+The second filter, when configured, selects events by the command name of
+the process that generated them. Selecting \texttt{cat}, for example, keeps
+only events whose \texttt{comm} field is exactly \texttt{cat}. This checks
+the task name, not the executable path or its command-line arguments.
+
+The third filter evaluates the active policies. Each policy first checks
+its common scope, then its rules, which can constrain process attributes
+and event arguments. A matching suppression policy rejects the event even
+if another policy allows it. When no policies are configured, this filter
+accepts the event.
+
+Processing stops at the first rejection. Only events that pass all three
+filters reach event output and detector evaluation. These checks reduce
+the work performed after decoding; they do not reduce traffic already
+transferred from the kernel.
+
+Listing~\ref{lst:event-admission} shows the filter order and the subsequent
+processing. The \texttt{alerts-only} option skips event printing while
+keeping detection enabled. Optional socket enrichment and diagnostics are
+omitted.
 
 \begin{lstlisting}[
     language=Go,
-    caption={Decoded-event admission and consumer fan-out (abridged).},
+    caption={Decoded-event admission and consumer fan-out.},
     label={lst:event-admission}
 ]
 event, err := bufferdecoder.DecodeEvent(raw)
@@ -235,8 +254,6 @@ if !p.cfg.Alerts.Only {
 }
 p.processDetectors(ctx, event)
 \end{lstlisting}
-
-Failure at any gate prevents both event output and detector evaluation.
 
 Valid rejections are distinguished from failures. Only the first few filter
 drops are logged at debug level, preventing unbounded diagnostics. Decode,
@@ -292,10 +309,14 @@ Event exclusions override inclusions, and an empty include list starts from all
 events. Filters written as \texttt{args.<name>} run after decoding because they
 need typed arguments.
 
-The optional \texttt{detectors} block selects definitions by identifier,
-severity, tags, statefulness or MITRE ATT\&CK metadata. Values in one criterion
-are alternatives; populated criteria are combined. Exclusions are then removed
-from the catalogue. Suppression policies cannot select detectors.
+The optional \texttt{detectors} block chooses which detector definitions
+to enable. Selection can use identifiers, severity, tags, statefulness
+or MITRE ATT\&CK metadata. A detector must satisfy every specified
+criterion, but may match any of the values listed within that criterion.
+For example, selecting severities \texttt{high} and \texttt{critical}
+together with the tag \texttt{filesystem} keeps filesystem detectors
+with either severity. Explicit exclusions remove detectors from this
+selection.
 
 A detector document defines input events, matching logic, alert fields and
 optional ATT\&CK classification. Listing~\ref{lst:detector-yaml-schema} shows a
@@ -399,130 +420,100 @@ correlation keys and tests the next expected step. An event can advance or
 complete existing state, or start a new sequence by matching its first step.
 
 \subsection{Compiled Correlation State and Alert Deduplication}
-  \label{subsec:implementation-correlation-deduplication}
+\label{subsec:implementation-correlation-deduplication}
 
-YAML \texttt{group\_by} values are compiled into a correlation plan during
-detector construction. Event processing then calls preselected key extractors
-without parsing strategy names again.
+A collective detector must identify which events belong to the same
+sequence. Its YAML \texttt{group\_by} setting defines the fields used
+to make this association. During construction, the detector prepares
+the functions that extract these fields, so event processing does not
+need to interpret the configuration again.
 
-The supported components produce these internal values:
+The supported correlation criteria are:
+\begin{itemize}
+    \item \texttt{process}: the host PID and task start time;
+    \item \texttt{process\_tree}: the process identity, with an additional
+    lookup using the immediate parent's identity;
+    \item \texttt{resource}: the file's device and inode numbers;
+    \item \texttt{cgroup}: the local kernel cgroup identifier.
+\end{itemize}
 
-  \begin{itemize}
-      \item \texttt{process} combines the host PID and task start time;
-      \item \texttt{process\_tree} can additionally produce the immediate
-      parent's host PID and start time when looking up an existing sequence;
-      \item \texttt{resource} combines the device and inode arguments;
-      \item \texttt{cgroup} uses the local kernel cgroup identifier.
-  \end{itemize}
+When several criteria are selected, their values form one key and all
+are required. An event with missing correlation data cannot advance
+a sequence. Unknown or repeated criteria are rejected during detector
+construction. Resource correlation also requires every step to expose
+\texttt{dev} and \texttt{inode}. The \texttt{user\_session} criterion is
+unsupported because the events do not provide a stable session identifier.
 
-Several components form one composite key, and all must be present. Missing
-process, resource or cgroup data stops the transition instead of falling back
-to a weaker identity.
+Each detector stores at most one incomplete sequence per key. The stored
+state contains the matched events, the time of the first match and the
+next expected step. Listing~\ref{lst:collective-transition} shows how an
+incoming event advances an existing sequence. Completing the final step
+generates an alert and removes that state.
 
-Plan construction rejects unknown or duplicate components. Resource
-correlation requires \texttt{dev} and \texttt{inode} in every step.
-\texttt{user\_session} is unsupported because events do not expose a stable
-session identifier; UID is not used as an approximation.
+\begin{lstlisting}[
+    language=Go,
+    caption={Advancement of a partial collective sequence.},
+    label={lst:collective-transition}
+]
+for _, key := range lookupKeys {
+    state, ok := d.state[key]
+    if !ok {
+        continue
+    }
+    if now.Sub(state.firstSeen) > window {
+        delete(d.state, key)
+        continue
+    }
 
-Each collective detector maps correlation keys to partial sequences. An entry
-stores the next step, initial time and matched evidence. Listing
-\ref{lst:collective-transition} shows how an event advances it.
+    matches, err :=
+        stepMatches(event, d.steps[state.nextStep])
+    if err != nil {
+        return nil, err
+    }
+    if !matches {
+        continue
+    }
 
-  \begin{lstlisting}[
-      language=Go,
-      caption={Advancement of a partial collective sequence (abridged).},
-      label={lst:collective-transition}
-  ]
-  for _, key := range lookupKeys {
-      state, ok := d.state[key]
-      if !ok {
-          continue
-      }
-      if now.Sub(state.firstSeen) > window {
-          delete(d.state, key)
-          continue
-      }
+state.events = append(state.events, event)
+  state.nextStep++
 
-      matches, err :=
-          stepMatches(event, d.steps[state.nextStep])
-      if err != nil {
-          return nil, err
-      }
-      if !matches {
-          continue
-      }
-
-      state.events = append(state.events, event)
-      state.nextStep++
-
-      if state.nextStep >= len(d.steps) {
-          delete(d.state, key)
-          return []detectors.Alert{
-              d.newAlertFromEvents(state.events),
-          }, nil
-      }
-
-      d.state[key] = state
-      return nil, nil
+  if state.nextStep >= len(d.steps) {
+      delete(d.state, key)
+      return []detectors.Alert{
+          d.newAlertFromEvents(state.events),
+      }, nil
   }
-  \end{lstlisting}
 
-Process-tree lookup may use both the current process and its immediate parent,
-allowing a child event to advance parent state without a persistent process
-graph. If no state advances, a first-step match creates an entry under its
-initial key. Each key retains at most one partial sequence.
+  d.state[key] = state
+    return nil, nil
+}
+\end{lstlisting}
 
-Table~\ref{tab:correlation-bounds} lists the state safeguards; they are not
-performance results.
+With \texttt{process\_tree}, a child event can
+advance a sequence started by its immediate parent. This does not require
+a persistent process graph and does not follow arbitrary ancestry.
 
-  \begin{table}[H]
-      \centering
-      \small
-      \renewcommand{\arraystretch}{1.15}
-      \begin{tabularx}{\textwidth}{
-          @{}p{0.27\textwidth}p{0.21\textwidth}X@{}}
-          \toprule
-          \textbf{Mechanism} & \textbf{Value} & \textbf{Runtime effect} \\
-          \midrule
+Each correlation key holds only one incomplete sequence. If an event
+does not advance that sequence but matches its first step, it replaces
+the stored sequence and restarts the time window. For example, when
+looking for A followed by B, receiving A twice under the same key means
+that the detector waits for B after the most recent A.
 
-          Stateful window &
-          2-second default; 5-second maximum &
-          Bounds the lifetime of incomplete evidence. Longer definitions are
-          rejected during validation. \\
+A sequence must complete within its configured time window, which defaults
+to two seconds and cannot exceed five seconds. The window starts when the
+runtime stores the first matching event. Each detector stores at most 4,096 incomplete sequences.
+At capacity, adding a new key removes the oldest incomplete sequence.
 
-          Periodic pruning &
-          \texttt{min(window/2, 1 second)} &
-          Avoids scanning the complete state map for every event. The directly
-          addressed entry is still checked immediately. \\
+Expired sequences cannot advance. They are removed when accessed or during
+cleanup checks triggered by incoming events. Without further events,
+expired entries may remain in memory until processing resumes.
 
-          Sequence capacity &
-          4,096 keys per detector &
-          Inserting a new key at capacity evicts the oldest incomplete sequence. \\
-
-          Alert deduplication &
-          5-second suppression window &
-          Prevents repeated equivalent alerts from being emitted during the
-          configured interval. Entries older than 10 seconds are removed when
-          later alert batches are processed. \\
-
-          \bottomrule
-      \end{tabularx}
-      \caption{Runtime bounds for collective state and alert deduplication.}
-      \label{tab:correlation-bounds}
-  \end{table}
-
-Expired state is removed when addressed or during periodic pruning triggered by
-relevant events. The interface exposes \texttt{Flush}, but the production
-runtime does not schedule it independently. Idle stale entries may remain until
-later traffic or capacity pressure triggers cleanup.
-
-Alert deduplication runs after evaluation and is independent of sequence state.
-Its key contains detector identity, title, severity and fields from the first
-evidence event, excluding timestamps and thread identifiers. Repeated keys
-inside the window are suppressed.
-
-The key is neither the complete collective sequence nor a durable causal
-identity. The deduplication map also has no independent capacity limit.
+Alert deduplication is separate from sequence tracking. It suppresses an
+alert when the same deduplication key was emitted less than five seconds
+earlier. The key combines the detector identity, title and severity with
+the first evidence event's name, process PID, UID, command name and argument
+values. It does not compare the complete sequence, so alerts with different
+later observations may still be treated as duplicates.
 
 \section{Output and Structured Logging}
   \label{sec:implementation-output-logging}
